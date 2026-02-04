@@ -1,0 +1,29 @@
+{
+  "opencode": {
+    "baseUrl": "http://127.0.0.1:4096",
+    "desktopBaseUrl": "https://opencode.example.com",
+    "username": "opencode",
+    "password": "your-password"
+  },
+  "providers": [
+    {
+      "type": "discord",
+      "enabled": true,
+      "webhookUrl": "https://discord.com/api/webhooks/..."
+    },
+    {
+      "type": "msteams",
+      "enabled": false,
+      "webhookUrl": "https://outlook.office.com/webhook/..."
+    },
+    {
+      "type": "webhook",
+      "enabled": false,
+      "url": "https://my-server.com/notify",
+      "method": "POST",
+      "headers": {
+        "Authorization": "Bearer secret"
+      }
+    }
+  ]
+}
