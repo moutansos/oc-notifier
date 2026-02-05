@@ -58,36 +58,109 @@ async function main() {
   const sseClient = new SSEClient(config.opencode);
 
   // Track previous session status to detect transitions TO idle
-  const previousStatus = new Map<string, string>();
+  // Map of sessionID -> { status, lastSeen }
+  const sessionState = new Map<string, { status: string; lastSeen: number }>();
+
+  // Track pending notification timers for debouncing
+  const pendingNotifications = new Map<string, Timer>();
+
+  // Track known subagent sessions to avoid re-fetching
+  const knownSubagents = new Set<string>();
+
+  // Cleanup old sessions periodically (every 5 minutes, remove entries older than 1 hour)
+  const SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
+  const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+  setInterval(() => {
+    const now = Date.now();
+    let cleaned = 0;
+    for (const [sessionID, state] of sessionState) {
+      if (now - state.lastSeen > SESSION_TTL_MS) {
+        sessionState.delete(sessionID);
+        knownSubagents.delete(sessionID);
+        cleaned++;
+      }
+    }
+    if (cleaned > 0) {
+      console.log(`Cleaned up ${cleaned} stale session(s) from tracking`);
+    }
+  }, CLEANUP_INTERVAL_MS);
+
+  console.log(`Debounce delay: ${config.debounceMs}ms`);
 
   // Handle session status events (from all projects via /global/event)
   sseClient.onSessionStatus(async (event, directory) => {
     const { sessionID, status } = event.properties;
-    const prevStatus = previousStatus.get(sessionID);
+    const prevState = sessionState.get(sessionID);
+    const prevStatus = prevState?.status;
     const currentStatus = status.type;
+    const now = Date.now();
 
-    // Update tracked status
-    previousStatus.set(sessionID, currentStatus);
+    // Update tracked status with timestamp
+    sessionState.set(sessionID, { status: currentStatus, lastSeen: now });
+
+    // Skip known subagent sessions early
+    if (knownSubagents.has(sessionID)) {
+      return;
+    }
+
+    // If session goes busy/retry, cancel any pending notification
+    if (currentStatus !== "idle") {
+      const pendingTimer = pendingNotifications.get(sessionID);
+      if (pendingTimer) {
+        clearTimeout(pendingTimer);
+        pendingNotifications.delete(sessionID);
+        console.log(`Session ${sessionID} went ${currentStatus}, cancelled pending notification`);
+      } else {
+        console.log(`Session ${sessionID} status: ${currentStatus} (project: ${directory})`);
+      }
+      return;
+    }
 
     // Only notify when transitioning TO idle (not on initial idle)
     if (currentStatus === "idle" && prevStatus && prevStatus !== "idle") {
-      console.log(`Session ${sessionID} transitioned to idle (project: ${directory})`);
+      // Check if there's already a pending notification (shouldn't happen, but be safe)
+      if (pendingNotifications.has(sessionID)) {
+        return;
+      }
 
-      // Fetch session info for richer notification
-      const sessionInfo = await sseClient.fetchSessionInfo(sessionID);
+      console.log(`Session ${sessionID} went idle, scheduling notification in ${config.debounceMs}ms...`);
 
-      const notification: Notification = {
-        sessionId: sessionID,
-        sessionTitle: sessionInfo?.title || sessionID,
-        projectId: sessionInfo?.projectID || "",
-        projectDirectory: directory,
-        desktopUrl: buildDesktopUrl(config.opencode.desktopBaseUrl, sessionInfo?.projectID || "", sessionID),
-        timestamp: new Date(),
-      };
+      // Schedule the notification after debounce delay
+      const timer = setTimeout(async () => {
+        pendingNotifications.delete(sessionID);
 
-      await notifier.send(notification);
-    } else if (currentStatus !== "idle") {
-      console.log(`Session ${sessionID} status: ${currentStatus} (project: ${directory})`);
+        // Double-check the session is still idle
+        const currentState = sessionState.get(sessionID);
+        if (currentState?.status !== "idle") {
+          console.log(`Session ${sessionID} no longer idle, skipping notification`);
+          return;
+        }
+
+        // Fetch session info to check if it's a subagent
+        const sessionInfo = await sseClient.fetchSessionInfo(sessionID);
+
+        // Skip subagent sessions (those with a parent session)
+        if (sessionInfo?.parentSessionID) {
+          console.log(`Session ${sessionID} is a subagent (parent: ${sessionInfo.parentSessionID}), skipping notification`);
+          knownSubagents.add(sessionID);
+          return;
+        }
+
+        console.log(`Session ${sessionID} still idle, sending notification (project: ${directory})`);
+
+        const notification: Notification = {
+          sessionId: sessionID,
+          sessionTitle: sessionInfo?.title || sessionID,
+          projectId: sessionInfo?.projectID || "",
+          projectDirectory: directory,
+          desktopUrl: buildDesktopUrl(config.opencode.desktopBaseUrl, sessionInfo?.projectID || "", sessionID),
+          timestamp: new Date(),
+        };
+
+        await notifier.send(notification);
+      }, config.debounceMs);
+
+      pendingNotifications.set(sessionID, timer);
     }
   });
 

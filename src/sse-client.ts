@@ -27,6 +27,7 @@ export interface GlobalEvent {
 
 export interface SessionInfo {
   id: string;
+  parentSessionID?: string;
   title: string;
   projectID: string;
 }
@@ -76,9 +77,10 @@ export class SSEClient {
         return null;
       }
 
-      const data = await response.json() as { id: string; title?: string; projectID: string };
+      const data = await response.json() as { id: string; parentSessionID?: string; title?: string; projectID: string };
       const info: SessionInfo = {
         id: data.id,
+        parentSessionID: data.parentSessionID,
         title: data.title || sessionId,
         projectID: data.projectID,
       };

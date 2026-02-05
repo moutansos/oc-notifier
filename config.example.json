@@ -5,6 +5,7 @@
     "username": "opencode",
     "password": "your-password"
   },
+  "debounceMs": 3000,
   "providers": [
     {
       "type": "discord",

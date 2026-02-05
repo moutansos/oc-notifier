@@ -34,6 +34,8 @@ export type ProviderConfig = DiscordProviderConfig | WebhookProviderConfig | MST
 export interface Config {
   opencode: OpenCodeConfig;
   providers: ProviderConfig[];
+  /** Delay in ms before sending notification after idle (default: 3000). Cancels if session goes busy. */
+  debounceMs: number;
 }
 
 function validateOpenCodeConfig(config: unknown): OpenCodeConfig {
@@ -156,7 +158,16 @@ function validateConfig(config: unknown): Config {
 
   const providers = obj.providers.map((p, i) => validateProviderConfig(p, i));
 
-  return { opencode, providers };
+  // Validate debounceMs (optional, default 3000ms)
+  let debounceMs = 3000;
+  if (obj.debounceMs !== undefined) {
+    if (typeof obj.debounceMs !== "number" || obj.debounceMs < 0) {
+      throw new Error("debounceMs must be a non-negative number");
+    }
+    debounceMs = obj.debounceMs;
+  }
+
+  return { opencode, providers, debounceMs };
 }
 
 export async function loadConfig(path: string): Promise<Config> {
