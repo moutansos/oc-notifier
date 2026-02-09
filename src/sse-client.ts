@@ -19,6 +19,31 @@ export interface SessionStatusEvent {
   };
 }
 
+// Tool state types for tracking tool execution
+export type ToolState =
+  | { status: "pending"; input: Record<string, unknown> }
+  | { status: "running"; input: Record<string, unknown>; title?: string; metadata?: Record<string, unknown> }
+  | { status: "completed"; input: Record<string, unknown>; output: string; title: string; metadata: Record<string, unknown> }
+  | { status: "error"; input: Record<string, unknown>; error: string };
+
+export interface ToolPart {
+  id: string;
+  sessionID: string;
+  messageID: string;
+  type: "tool";
+  callID: string;
+  tool: string;
+  state: ToolState;
+}
+
+export interface MessagePartUpdatedEvent {
+  type: "message.part.updated";
+  properties: {
+    part: ToolPart | { type: string; sessionID?: string };
+    delta?: string;
+  };
+}
+
 // Global event wrapper - events from /global/event are wrapped with directory info
 export interface GlobalEvent {
   directory: string;
@@ -33,6 +58,7 @@ export interface SessionInfo {
 }
 
 type EventHandler = (event: SessionStatusEvent, directory: string) => void;
+type QuestionToolHandler = (sessionID: string, toolState: ToolState, directory: string) => void;
 
 export class SSEClient {
   private readonly baseUrl: string;
@@ -42,9 +68,7 @@ export class SSEClient {
   private readonly maxReconnectDelay = 30000;
   private isRunning = false;
   private eventHandlers: EventHandler[] = [];
-
-  // Session info cache
-  private sessionCache = new Map<string, SessionInfo>();
+  private questionToolHandlers: QuestionToolHandler[] = [];
 
   constructor(config: OpenCodeConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
@@ -60,33 +84,33 @@ export class SSEClient {
     this.eventHandlers.push(handler);
   }
 
-  async fetchSessionInfo(sessionId: string): Promise<SessionInfo | null> {
-    // Check cache first
-    const cached = this.sessionCache.get(sessionId);
-    if (cached) {
-      return cached;
-    }
+  onQuestionTool(handler: QuestionToolHandler): void {
+    this.questionToolHandlers.push(handler);
+  }
 
+  async fetchSessionInfo(sessionId: string, directory: string): Promise<SessionInfo | null> {
     try {
-      const response = await fetch(`${this.baseUrl}/session/${sessionId}`, {
+      const url = `${this.baseUrl}/session/${sessionId}?directory=${encodeURIComponent(directory)}`;
+      console.log(`[DEBUG] fetchSessionInfo requesting: ${url}`);
+      const response = await fetch(url, {
         headers: this.headers,
       });
 
       if (!response.ok) {
-        console.error(`Failed to fetch session info: ${response.status}`);
+        const text = await response.text();
+        console.error(`Failed to fetch session info: ${response.status} ${text}`);
         return null;
       }
 
-      const data = await response.json() as { id: string; parentSessionID?: string; title?: string; projectID: string };
+      const data = await response.json() as { id: string; parentID?: string; title?: string; projectID: string };
+      console.log(`[DEBUG] fetchSessionInfo response for ${sessionId}: ${JSON.stringify(data)}`);
       const info: SessionInfo = {
         id: data.id,
-        parentSessionID: data.parentSessionID,
+        parentSessionID: data.parentID,
         title: data.title || sessionId,
         projectID: data.projectID,
       };
 
-      // Cache the result
-      this.sessionCache.set(sessionId, info);
       return info;
     } catch (error) {
       console.error(`Error fetching session info:`, error);
@@ -193,8 +217,22 @@ export class SSEClient {
 
       if (payload.type === "session.status") {
         const statusEvent = payload as SessionStatusEvent;
+        if (statusEvent.properties.status.type === "idle") {
+          console.log(`[DEBUG] Raw idle SSE event JSON: ${data}`);
+        }
         for (const handler of this.eventHandlers) {
           handler(statusEvent, directory);
+        }
+      } else if (payload.type === "message.part.updated") {
+        const partEvent = payload as MessagePartUpdatedEvent;
+        const part = partEvent.properties.part;
+
+        // Check if this is a question tool call
+        if (part.type === "tool" && (part as ToolPart).tool === "question") {
+          const toolPart = part as ToolPart;
+          for (const handler of this.questionToolHandlers) {
+            handler(toolPart.sessionID, toolPart.state, directory);
+          }
         }
       }
     } catch (error) {

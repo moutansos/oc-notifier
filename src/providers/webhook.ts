@@ -20,8 +20,10 @@ export class WebhookProvider implements NotificationProvider {
   }
 
   async send(notification: Notification): Promise<void> {
-    const body = {
-      event: "session.idle",
+    const eventType = notification.type === "question" ? "session.question" : "session.idle";
+
+    const body: Record<string, unknown> = {
+      event: eventType,
       session: {
         id: notification.sessionId,
         title: notification.sessionTitle,
@@ -33,6 +35,11 @@ export class WebhookProvider implements NotificationProvider {
       desktopUrl: notification.desktopUrl,
       timestamp: notification.timestamp.toISOString(),
     };
+
+    // Add question text if present
+    if (notification.question) {
+      body.question = notification.question;
+    }
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",

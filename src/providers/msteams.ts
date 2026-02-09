@@ -20,6 +20,58 @@ export class MSTeamsProvider implements NotificationProvider {
     // Extract just the project folder name from the full path
     const projectName = notification.projectDirectory.split("/").pop() || notification.projectDirectory;
 
+    const isQuestion = notification.type === "question";
+    const title = isQuestion
+      ? `Question Pending: ${projectName}`
+      : `Session Idle: ${projectName}`;
+    const status = isQuestion ? "Waiting for your response" : "Ready for input";
+
+    const bodyElements: unknown[] = [
+      {
+        type: "TextBlock",
+        size: "Large",
+        weight: "Bolder",
+        text: title,
+        style: "heading",
+        color: isQuestion ? "warning" : "default",
+      },
+      {
+        type: "FactSet",
+        facts: [
+          {
+            title: "Project",
+            value: projectName,
+          },
+          {
+            title: "Session",
+            value: notification.sessionTitle || notification.sessionId,
+          },
+          {
+            title: "Status",
+            value: status,
+          },
+        ],
+      },
+    ];
+
+    // Add question text if present
+    if (notification.question) {
+      bodyElements.push({
+        type: "TextBlock",
+        text: `**Question:** ${notification.question.length > 500 ? notification.question.slice(0, 497) + "..." : notification.question}`,
+        wrap: true,
+        spacing: "Medium",
+      });
+    }
+
+    bodyElements.push({
+      type: "TextBlock",
+      text: notification.projectDirectory,
+      size: "Small",
+      isSubtle: true,
+      wrap: true,
+    });
+
     // Adaptive Card format for MS Teams
     const card = {
       type: "message",
@@ -30,39 +82,7 @@ export class MSTeamsProvider implements NotificationProvider {
             $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
             type: "AdaptiveCard",
             version: "1.4",
-            body: [
-              {
-                type: "TextBlock",
-                size: "Large",
-                weight: "Bolder",
-                text: "Session Idle",
-                style: "heading",
-              },
-              {
-                type: "FactSet",
-                facts: [
-                  {
-                    title: "Project",
-                    value: projectName,
-                  },
-                  {
-                    title: "Session",
-                    value: notification.sessionTitle || notification.sessionId,
-                  },
-                  {
-                    title: "Status",
-                    value: "Ready for input",
-                  },
-                ],
-              },
-              {
-                type: "TextBlock",
-                text: notification.projectDirectory,
-                size: "Small",
-                isSubtle: true,
-                wrap: true,
-              },
-            ],
+            body: bodyElements,
             actions: [
               {
                 type: "Action.OpenUrl",

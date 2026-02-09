@@ -2,7 +2,7 @@
  * oc-notifier - CLI entry point
  *
  * Connects to an OpenCode server's SSE stream and sends push notifications
- * when sessions transition to idle state.
+ * when sessions transition to idle state or when the question tool is invoked.
  */
 
 import { parseArgs } from "util";
@@ -10,6 +10,8 @@ import { loadConfig } from "./config.ts";
 import { SSEClient } from "./sse-client.ts";
 import { createProviders, type Notification } from "./providers/index.ts";
 import { Notifier } from "./notifier.ts";
+
+import type { ToolState } from "./sse-client.ts";
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -95,6 +97,8 @@ async function main() {
     const currentStatus = status.type;
     const now = Date.now();
 
+    console.log(`[DEBUG] Session ${sessionID} event: ${prevStatus ?? "(new)"} -> ${currentStatus} (project: ${directory}, timestamp: ${now})`);
+
     // Update tracked status with timestamp
     sessionState.set(sessionID, { status: currentStatus, lastSeen: now });
 
@@ -137,7 +141,7 @@ async function main() {
         }
 
         // Fetch session info to check if it's a subagent
-        const sessionInfo = await sseClient.fetchSessionInfo(sessionID);
+        const sessionInfo = await sseClient.fetchSessionInfo(sessionID, directory);
 
         // Skip subagent sessions (those with a parent session)
         if (sessionInfo?.parentSessionID) {
@@ -147,8 +151,10 @@ async function main() {
         }
 
         console.log(`Session ${sessionID} still idle, sending notification (project: ${directory})`);
+        console.log(`[DEBUG] sessionInfo: ${JSON.stringify(sessionInfo)}`);
 
         const notification: Notification = {
+          type: "idle",
           sessionId: sessionID,
           sessionTitle: sessionInfo?.title || sessionID,
           projectId: sessionInfo?.projectID || "",
@@ -157,11 +163,79 @@ async function main() {
           timestamp: new Date(),
         };
 
+        console.log(`[DEBUG] Sending notification: ${JSON.stringify(notification)}`);
         await notifier.send(notification);
       }, config.debounceMs);
 
       pendingNotifications.set(sessionID, timer);
     }
+  });
+
+  // Track question tool calls to avoid duplicate notifications
+  // Map of "sessionID:callID" -> timestamp when we notified
+  const notifiedQuestions = new Map<string, number>();
+
+  // Clean up old question tracking entries periodically
+  const QUESTION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, timestamp] of notifiedQuestions) {
+      if (now - timestamp > QUESTION_TTL_MS) {
+        notifiedQuestions.delete(key);
+      }
+    }
+  }, CLEANUP_INTERVAL_MS);
+
+  // Handle question tool events
+  sseClient.onQuestionTool(async (sessionID: string, toolState: ToolState, directory: string) => {
+    // Only notify when the question tool is in "running" state (waiting for user input)
+    if (toolState.status !== "running") {
+      return;
+    }
+
+    // Skip known subagent sessions
+    if (knownSubagents.has(sessionID)) {
+      return;
+    }
+
+    // Extract question text from the tool input
+    const input = toolState.input as { questions?: Array<{ question?: string }> };
+    const questionText = input.questions?.[0]?.question || "OpenCode is waiting for your input";
+
+    // Create a unique key for this question call to avoid duplicate notifications
+    // We use a hash of the question text since we don't have callID in this context
+    const questionKey = `${sessionID}:${questionText.slice(0, 100)}`;
+    if (notifiedQuestions.has(questionKey)) {
+      return;
+    }
+
+    console.log(`Question tool invoked in session ${sessionID}, sending notification...`);
+
+    // Fetch session info
+    const sessionInfo = await sseClient.fetchSessionInfo(sessionID, directory);
+
+    // Skip subagent sessions
+    if (sessionInfo?.parentSessionID) {
+      console.log(`Session ${sessionID} is a subagent, skipping question notification`);
+      knownSubagents.add(sessionID);
+      return;
+    }
+
+    // Mark as notified
+    notifiedQuestions.set(questionKey, Date.now());
+
+    const notification: Notification = {
+      type: "question",
+      sessionId: sessionID,
+      sessionTitle: sessionInfo?.title || sessionID,
+      projectId: sessionInfo?.projectID || "",
+      projectDirectory: directory,
+      desktopUrl: buildDesktopUrl(config.opencode.desktopBaseUrl, sessionInfo?.projectID || "", sessionID),
+      timestamp: new Date(),
+      question: questionText,
+    };
+
+    await notifier.send(notification);
   });
 
   // Handle graceful shutdown
