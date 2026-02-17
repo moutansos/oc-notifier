@@ -21,10 +21,15 @@ export class MSTeamsProvider implements NotificationProvider {
     const projectName = notification.projectDirectory.split("/").pop() || notification.projectDirectory;
 
     const isQuestion = notification.type === "question";
-    const title = isQuestion
-      ? `Question Pending: ${projectName}`
-      : `Session Idle: ${projectName}`;
-    const status = isQuestion ? "Waiting for your response" : "Ready for input";
+    const isPermission = notification.type === "permission";
+    const title = isPermission
+      ? `Permission Required: ${projectName}`
+      : isQuestion
+        ? `Question Pending: ${projectName}`
+        : `Session Idle: ${projectName}`;
+    const status = isPermission
+      ? "Waiting for permission"
+      : isQuestion ? "Waiting for your response" : "Ready for input";
 
     const bodyElements: unknown[] = [
       {
@@ -33,7 +38,7 @@ export class MSTeamsProvider implements NotificationProvider {
         weight: "Bolder",
         text: title,
         style: "heading",
-        color: isQuestion ? "warning" : "default",
+        color: isPermission ? "attention" : isQuestion ? "warning" : "default",
       },
       {
         type: "FactSet",
@@ -59,6 +64,16 @@ export class MSTeamsProvider implements NotificationProvider {
       bodyElements.push({
         type: "TextBlock",
         text: `**Question:** ${notification.question.length > 500 ? notification.question.slice(0, 497) + "..." : notification.question}`,
+        wrap: true,
+        spacing: "Medium",
+      });
+    }
+
+    // Add permission details if present
+    if (notification.permissionTitle) {
+      bodyElements.push({
+        type: "TextBlock",
+        text: `**Permission:** ${notification.permissionTitle.length > 500 ? notification.permissionTitle.slice(0, 497) + "..." : notification.permissionTitle}`,
         wrap: true,
         spacing: "Medium",
       });

@@ -2,7 +2,8 @@
  * oc-notifier - CLI entry point
  *
  * Connects to an OpenCode server's SSE stream and sends push notifications
- * when sessions transition to idle state or when the question tool is invoked.
+ * when sessions transition to idle state, when the question tool is invoked,
+ * or when a permission request is pending.
  */
 
 import { parseArgs } from "util";
@@ -11,7 +12,7 @@ import { SSEClient } from "./sse-client.ts";
 import { createProviders, type Notification } from "./providers/index.ts";
 import { Notifier } from "./notifier.ts";
 
-import type { ToolState } from "./sse-client.ts";
+import type { ToolState, Permission } from "./sse-client.ts";
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -233,6 +234,65 @@ async function main() {
       desktopUrl: buildDesktopUrl(config.opencode.desktopBaseUrl, sessionInfo?.projectID || "", sessionID),
       timestamp: new Date(),
       question: questionText,
+    };
+
+    await notifier.send(notification);
+  });
+
+  // Track permission requests to avoid duplicate notifications
+  // Map of "permissionID" -> timestamp when we notified
+  const notifiedPermissions = new Map<string, number>();
+
+  // Clean up old permission tracking entries periodically
+  const PERMISSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, timestamp] of notifiedPermissions) {
+      if (now - timestamp > PERMISSION_TTL_MS) {
+        notifiedPermissions.delete(key);
+      }
+    }
+  }, CLEANUP_INTERVAL_MS);
+
+  // Handle permission request events
+  sseClient.onPermission(async (permission: Permission, directory: string) => {
+    const { sessionID, id: permissionID } = permission;
+
+    // Skip known subagent sessions
+    if (knownSubagents.has(sessionID)) {
+      return;
+    }
+
+    // Deduplicate by permission ID
+    if (notifiedPermissions.has(permissionID)) {
+      return;
+    }
+
+    console.log(`Permission request "${permission.title}" in session ${sessionID}, sending notification...`);
+
+    // Fetch session info
+    const sessionInfo = await sseClient.fetchSessionInfo(sessionID, directory);
+
+    // Skip subagent sessions
+    if (sessionInfo?.parentSessionID) {
+      console.log(`Session ${sessionID} is a subagent, skipping permission notification`);
+      knownSubagents.add(sessionID);
+      return;
+    }
+
+    // Mark as notified
+    notifiedPermissions.set(permissionID, Date.now());
+
+    const notification: Notification = {
+      type: "permission",
+      sessionId: sessionID,
+      sessionTitle: sessionInfo?.title || sessionID,
+      projectId: sessionInfo?.projectID || "",
+      projectDirectory: directory,
+      desktopUrl: buildDesktopUrl(config.opencode.desktopBaseUrl, sessionInfo?.projectID || "", sessionID),
+      timestamp: new Date(),
+      permissionTitle: permission.title,
+      permissionType: permission.type,
     };
 
     await notifier.send(notification);

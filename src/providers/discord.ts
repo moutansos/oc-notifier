@@ -20,11 +20,16 @@ export class DiscordProvider implements NotificationProvider {
     const projectName = notification.projectDirectory.split("/").pop() || notification.projectDirectory;
 
     const isQuestion = notification.type === "question";
-    const title = isQuestion
-      ? `Question Pending: ${projectName}`
-      : `Session Idle: ${projectName}`;
-    const status = isQuestion ? "Waiting for your response" : "Ready for input";
-    const color = isQuestion ? 0xffa500 : 0x5865f2; // Orange for question, blurple for idle
+    const isPermission = notification.type === "permission";
+    const title = isPermission
+      ? `Permission Required: ${projectName}`
+      : isQuestion
+        ? `Question Pending: ${projectName}`
+        : `Session Idle: ${projectName}`;
+    const status = isPermission
+      ? "Waiting for permission"
+      : isQuestion ? "Waiting for your response" : "Ready for input";
+    const color = isPermission ? 0xed4245 : isQuestion ? 0xffa500 : 0x5865f2; // Red for permission, orange for question, blurple for idle
 
     const fields = [
       {
@@ -51,6 +56,17 @@ export class DiscordProvider implements NotificationProvider {
         value: notification.question.length > 1024
           ? notification.question.slice(0, 1021) + "..."
           : notification.question,
+        inline: false,
+      });
+    }
+
+    // Add permission details if present
+    if (notification.permissionTitle) {
+      fields.push({
+        name: "Permission",
+        value: notification.permissionTitle.length > 1024
+          ? notification.permissionTitle.slice(0, 1021) + "..."
+          : notification.permissionTitle,
         inline: false,
       });
     }

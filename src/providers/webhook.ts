@@ -20,7 +20,11 @@ export class WebhookProvider implements NotificationProvider {
   }
 
   async send(notification: Notification): Promise<void> {
-    const eventType = notification.type === "question" ? "session.question" : "session.idle";
+    const eventType = notification.type === "permission"
+      ? "session.permission"
+      : notification.type === "question"
+        ? "session.question"
+        : "session.idle";
 
     const body: Record<string, unknown> = {
       event: eventType,
@@ -39,6 +43,14 @@ export class WebhookProvider implements NotificationProvider {
     // Add question text if present
     if (notification.question) {
       body.question = notification.question;
+    }
+
+    // Add permission details if present
+    if (notification.permissionTitle) {
+      body.permissionTitle = notification.permissionTitle;
+    }
+    if (notification.permissionType) {
+      body.permissionType = notification.permissionType;
     }
 
     const headers: Record<string, string> = {

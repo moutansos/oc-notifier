@@ -2,7 +2,7 @@
  * Provider interface and notification types
  */
 
-export type NotificationType = "idle" | "question";
+export type NotificationType = "idle" | "question" | "permission";
 
 export interface Notification {
   type: NotificationType;
@@ -14,6 +14,10 @@ export interface Notification {
   timestamp: Date;
   /** Question text when type is "question" */
   question?: string;
+  /** Permission title when type is "permission" (e.g. "Edit src/index.ts") */
+  permissionTitle?: string;
+  /** Permission type when type is "permission" (e.g. "edit", "bash", "webfetch") */
+  permissionType?: string;
 }
 
 export interface NotificationProvider {

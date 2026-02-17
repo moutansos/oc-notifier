@@ -50,6 +50,24 @@ export interface GlobalEvent {
   payload: { type: string; properties?: unknown };
 }
 
+// Permission event types
+export interface Permission {
+  id: string;
+  type: string;
+  pattern?: string | string[];
+  sessionID: string;
+  messageID: string;
+  callID?: string;
+  title: string;
+  metadata: Record<string, unknown>;
+  time: { created: number };
+}
+
+export interface PermissionUpdatedEvent {
+  type: "permission.updated";
+  properties: Permission;
+}
+
 export interface SessionInfo {
   id: string;
   parentSessionID?: string;
@@ -59,6 +77,7 @@ export interface SessionInfo {
 
 type EventHandler = (event: SessionStatusEvent, directory: string) => void;
 type QuestionToolHandler = (sessionID: string, toolState: ToolState, directory: string) => void;
+type PermissionHandler = (permission: Permission, directory: string) => void;
 
 export class SSEClient {
   private readonly baseUrl: string;
@@ -69,6 +88,7 @@ export class SSEClient {
   private isRunning = false;
   private eventHandlers: EventHandler[] = [];
   private questionToolHandlers: QuestionToolHandler[] = [];
+  private permissionHandlers: PermissionHandler[] = [];
 
   constructor(config: OpenCodeConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
@@ -86,6 +106,10 @@ export class SSEClient {
 
   onQuestionTool(handler: QuestionToolHandler): void {
     this.questionToolHandlers.push(handler);
+  }
+
+  onPermission(handler: PermissionHandler): void {
+    this.permissionHandlers.push(handler);
   }
 
   async fetchSessionInfo(sessionId: string, directory: string): Promise<SessionInfo | null> {
@@ -233,6 +257,11 @@ export class SSEClient {
           for (const handler of this.questionToolHandlers) {
             handler(toolPart.sessionID, toolPart.state, directory);
           }
+        }
+      } else if (payload.type === "permission.updated") {
+        const permEvent = payload as PermissionUpdatedEvent;
+        for (const handler of this.permissionHandlers) {
+          handler(permEvent.properties, directory);
         }
       }
     } catch (error) {
