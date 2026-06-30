@@ -160,7 +160,7 @@ async function main() {
           sessionTitle: sessionInfo?.title || sessionID,
           projectId: sessionInfo?.projectID || "",
           projectDirectory: directory,
-          desktopUrl: buildDesktopUrl(config.opencode.desktopBaseUrl, sessionInfo?.projectID || "", sessionID),
+          desktopUrl: buildDesktopUrl(config.opencode.desktopBaseUrl, directory, sessionID),
           timestamp: new Date(),
         };
 
@@ -231,7 +231,7 @@ async function main() {
       sessionTitle: sessionInfo?.title || sessionID,
       projectId: sessionInfo?.projectID || "",
       projectDirectory: directory,
-      desktopUrl: buildDesktopUrl(config.opencode.desktopBaseUrl, sessionInfo?.projectID || "", sessionID),
+      desktopUrl: buildDesktopUrl(config.opencode.desktopBaseUrl, directory, sessionID),
       timestamp: new Date(),
       question: questionText,
     };
@@ -289,7 +289,7 @@ async function main() {
       sessionTitle: sessionInfo?.title || sessionID,
       projectId: sessionInfo?.projectID || "",
       projectDirectory: directory,
-      desktopUrl: buildDesktopUrl(config.opencode.desktopBaseUrl, sessionInfo?.projectID || "", sessionID),
+      desktopUrl: buildDesktopUrl(config.opencode.desktopBaseUrl, directory, sessionID),
       timestamp: new Date(),
       permissionTitle: permission.title,
       permissionType: permission.type,
@@ -312,8 +312,23 @@ async function main() {
   await sseClient.start();
 }
 
-function buildDesktopUrl(baseUrl: string, projectId: string, sessionId: string): string {
-  return `${baseUrl.replace(/\/$/, "")}/${projectId}/session/${sessionId}`;
+/** Matches OpenCode's base64url encoding from @opencode-ai/core/util/encode */
+function base64Encode(value: string): string {
+  return Buffer.from(value, "utf-8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=/g, "");
+}
+
+/**
+ * Build a deep link to a session in the OpenCode web/desktop UI.
+ * Uses the directory-keyed route: /{base64(directory)}/session/{sessionId}
+ * @see https://github.com/anomalyco/opencode/blob/dev/packages/app/src/utils/session-route.ts
+ */
+function buildDesktopUrl(baseUrl: string, directory: string, sessionId: string): string {
+  const encodedDirectory = base64Encode(directory);
+  return `${baseUrl.replace(/\/$/, "")}/${encodedDirectory}/session/${sessionId}`;
 }
 
 main().catch((error) => {
