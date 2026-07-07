@@ -12,7 +12,8 @@ import { SSEClient } from "./sse-client.ts";
 import { createProviders, type Notification } from "./providers/index.ts";
 import { Notifier } from "./notifier.ts";
 
-import type { ToolState, Permission } from "./sse-client.ts";
+import type { PermissionEvent, QuestionEvent } from "./sse-client.ts";
+import type { NotificationChoice } from "./providers/types.ts";
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -187,43 +188,31 @@ async function main() {
     }
   }, CLEANUP_INTERVAL_MS);
 
-  // Handle question tool events
-  sseClient.onQuestionTool(async (sessionID: string, toolState: ToolState, directory: string) => {
-    // Only notify when the question tool is in "running" state (waiting for user input)
-    if (toolState.status !== "running") {
-      return;
-    }
+  // Handle question events
+  sseClient.onQuestion(async (question: QuestionEvent, directory: string) => {
+    const { sessionID, id: questionID } = question;
 
     // Skip known subagent sessions
     if (knownSubagents.has(sessionID)) {
       return;
     }
 
-    // Extract question text from the tool input
-    const input = toolState.input as { questions?: Array<{ question?: string }> };
-    const questionText = input.questions?.[0]?.question || "OpenCode is waiting for your input";
-
-    // Create a unique key for this question call to avoid duplicate notifications
-    // We use a hash of the question text since we don't have callID in this context
-    const questionKey = `${sessionID}:${questionText.slice(0, 100)}`;
-    if (notifiedQuestions.has(questionKey)) {
+    if (notifiedQuestions.has(questionID)) {
       return;
     }
 
-    console.log(`Question tool invoked in session ${sessionID}, sending notification...`);
+    const questionText = formatQuestionText(question);
+    console.log(`Question asked in session ${sessionID}, sending notification...`);
 
-    // Fetch session info
     const sessionInfo = await sseClient.fetchSessionInfo(sessionID, directory);
 
-    // Skip subagent sessions
     if (sessionInfo?.parentSessionID) {
       console.log(`Session ${sessionID} is a subagent, skipping question notification`);
       knownSubagents.add(sessionID);
       return;
     }
 
-    // Mark as notified
-    notifiedQuestions.set(questionKey, Date.now());
+    notifiedQuestions.set(questionID, Date.now());
 
     const notification: Notification = {
       type: "question",
@@ -234,6 +223,7 @@ async function main() {
       desktopUrl: buildDesktopUrl(config.opencode.desktopBaseUrl, directory, sessionID),
       timestamp: new Date(),
       question: questionText,
+      choices: buildQuestionChoices(question),
     };
 
     await notifier.send(notification);
@@ -255,7 +245,7 @@ async function main() {
   }, CLEANUP_INTERVAL_MS);
 
   // Handle permission request events
-  sseClient.onPermission(async (permission: Permission, directory: string) => {
+  sseClient.onPermission(async (permission: PermissionEvent, directory: string) => {
     const { sessionID, id: permissionID } = permission;
 
     // Skip known subagent sessions
@@ -270,17 +260,14 @@ async function main() {
 
     console.log(`Permission request "${permission.title}" in session ${sessionID}, sending notification...`);
 
-    // Fetch session info
     const sessionInfo = await sseClient.fetchSessionInfo(sessionID, directory);
 
-    // Skip subagent sessions
     if (sessionInfo?.parentSessionID) {
       console.log(`Session ${sessionID} is a subagent, skipping permission notification`);
       knownSubagents.add(sessionID);
       return;
     }
 
-    // Mark as notified
     notifiedPermissions.set(permissionID, Date.now());
 
     const notification: Notification = {
@@ -292,7 +279,8 @@ async function main() {
       desktopUrl: buildDesktopUrl(config.opencode.desktopBaseUrl, directory, sessionID),
       timestamp: new Date(),
       permissionTitle: permission.title,
-      permissionType: permission.type,
+      permissionType: permission.permissionType,
+      choices: buildPermissionChoices(permission),
     };
 
     await notifier.send(notification);
@@ -310,6 +298,46 @@ async function main() {
 
   console.log("Starting oc-notifier...");
   await sseClient.start();
+}
+
+function formatQuestionText(question: QuestionEvent): string {
+  return question.questions
+    .map((item) => item.header ? `${item.header}: ${item.question}` : item.question)
+    .join("\n\n");
+}
+
+function buildQuestionChoices(question: QuestionEvent): NotificationChoice[] {
+  const choices: NotificationChoice[] = [];
+
+  for (const item of question.questions) {
+    for (const option of item.options) {
+      choices.push({
+        label: option.label,
+        description: option.description,
+      });
+    }
+
+    if (item.custom !== false) {
+      choices.push({
+        label: "Custom answer",
+        description: "Type your own response in OpenCode",
+      });
+    }
+  }
+
+  return choices;
+}
+
+function buildPermissionChoices(permission: PermissionEvent): NotificationChoice[] {
+  const alwaysDescription = permission.alwaysPatterns.length > 0
+    ? `Approve future requests matching: ${permission.alwaysPatterns.join(", ")}`
+    : "Approve future matching requests for this session";
+
+  return [
+    { label: "Once", description: "Approve just this request" },
+    { label: "Always", description: alwaysDescription },
+    { label: "Reject", description: "Deny the request" },
+  ];
 }
 
 /** Matches OpenCode's base64url encoding from @opencode-ai/core/util/encode */

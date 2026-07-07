@@ -3,7 +3,20 @@
  */
 
 import type { DiscordProviderConfig } from "../config.ts";
-import type { Notification, NotificationProvider } from "./types.ts";
+import type { Notification, NotificationChoice, NotificationProvider } from "./types.ts";
+
+function truncateField(value: string, maxLength = 1024): string {
+  return value.length > maxLength ? value.slice(0, maxLength - 3) + "..." : value;
+}
+
+function formatChoices(choices: NotificationChoice[]): string {
+  return choices
+    .map((choice) => {
+      const description = choice.description ? ` — ${choice.description}` : "";
+      return `• **${choice.label}**${description}`;
+    })
+    .join("\n");
+}
 
 export class DiscordProvider implements NotificationProvider {
   readonly type = "discord";
@@ -53,9 +66,7 @@ export class DiscordProvider implements NotificationProvider {
     if (notification.question) {
       fields.push({
         name: "Question",
-        value: notification.question.length > 1024
-          ? notification.question.slice(0, 1021) + "..."
-          : notification.question,
+        value: truncateField(notification.question),
         inline: false,
       });
     }
@@ -64,9 +75,15 @@ export class DiscordProvider implements NotificationProvider {
     if (notification.permissionTitle) {
       fields.push({
         name: "Permission",
-        value: notification.permissionTitle.length > 1024
-          ? notification.permissionTitle.slice(0, 1021) + "..."
-          : notification.permissionTitle,
+        value: truncateField(notification.permissionTitle),
+        inline: false,
+      });
+    }
+
+    if (notification.choices && notification.choices.length > 0) {
+      fields.push({
+        name: isPermission ? "Approval Options" : "Options",
+        value: truncateField(formatChoices(notification.choices)),
         inline: false,
       });
     }

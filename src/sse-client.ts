@@ -50,8 +50,27 @@ export interface GlobalEvent {
   payload: { type: string; properties?: unknown };
 }
 
-// Permission event types
-export interface Permission {
+// Permission event types (v2)
+export interface PermissionRequest {
+  id: string;
+  sessionID: string;
+  permission: string;
+  patterns: string[];
+  metadata: Record<string, unknown>;
+  always: string[];
+  tool?: {
+    messageID: string;
+    callID: string;
+  };
+}
+
+export interface PermissionAskedEvent {
+  type: "permission.asked";
+  properties: PermissionRequest;
+}
+
+// Permission event types (legacy)
+export interface PermissionLegacy {
   id: string;
   type: string;
   pattern?: string | string[];
@@ -65,7 +84,54 @@ export interface Permission {
 
 export interface PermissionUpdatedEvent {
   type: "permission.updated";
-  properties: Permission;
+  properties: PermissionLegacy;
+}
+
+/** Normalized permission event consumed by handlers */
+export interface PermissionEvent {
+  id: string;
+  sessionID: string;
+  title: string;
+  permissionType: string;
+  patterns: string[];
+  alwaysPatterns: string[];
+  metadata: Record<string, unknown>;
+}
+
+// Question event types (v2)
+export interface QuestionOption {
+  label: string;
+  description?: string;
+}
+
+export interface QuestionInfo {
+  question: string;
+  header?: string;
+  options: QuestionOption[];
+  multiple?: boolean;
+  custom?: boolean;
+}
+
+export interface QuestionRequest {
+  id: string;
+  sessionID: string;
+  questions: QuestionInfo[];
+  tool?: {
+    messageID: string;
+    callID: string;
+  };
+}
+
+export interface QuestionAskedEvent {
+  type: "question.asked";
+  properties: QuestionRequest;
+}
+
+/** Normalized question event consumed by handlers */
+export interface QuestionEvent {
+  id: string;
+  sessionID: string;
+  questions: QuestionInfo[];
 }
 
 export interface SessionInfo {
@@ -76,8 +142,8 @@ export interface SessionInfo {
 }
 
 type EventHandler = (event: SessionStatusEvent, directory: string) => void;
-type QuestionToolHandler = (sessionID: string, toolState: ToolState, directory: string) => void;
-type PermissionHandler = (permission: Permission, directory: string) => void;
+type QuestionHandler = (question: QuestionEvent, directory: string) => void;
+type PermissionHandler = (permission: PermissionEvent, directory: string) => void;
 
 export class SSEClient {
   private readonly baseUrl: string;
@@ -87,7 +153,7 @@ export class SSEClient {
   private readonly maxReconnectDelay = 30000;
   private isRunning = false;
   private eventHandlers: EventHandler[] = [];
-  private questionToolHandlers: QuestionToolHandler[] = [];
+  private questionHandlers: QuestionHandler[] = [];
   private permissionHandlers: PermissionHandler[] = [];
 
   constructor(config: OpenCodeConfig) {
@@ -104,8 +170,8 @@ export class SSEClient {
     this.eventHandlers.push(handler);
   }
 
-  onQuestionTool(handler: QuestionToolHandler): void {
-    this.questionToolHandlers.push(handler);
+  onQuestion(handler: QuestionHandler): void {
+    this.questionHandlers.push(handler);
   }
 
   onPermission(handler: PermissionHandler): void {
@@ -247,21 +313,37 @@ export class SSEClient {
         for (const handler of this.eventHandlers) {
           handler(statusEvent, directory);
         }
+      } else if (payload.type === "question.asked") {
+        const questionEvent = payload as QuestionAskedEvent;
+        const normalized = normalizeQuestionRequest(questionEvent.properties);
+        for (const handler of this.questionHandlers) {
+          handler(normalized, directory);
+        }
       } else if (payload.type === "message.part.updated") {
         const partEvent = payload as MessagePartUpdatedEvent;
         const part = partEvent.properties.part;
 
-        // Check if this is a question tool call
+        // Legacy fallback: question tool via message.part.updated
         if (part.type === "tool" && (part as ToolPart).tool === "question") {
           const toolPart = part as ToolPart;
-          for (const handler of this.questionToolHandlers) {
-            handler(toolPart.sessionID, toolPart.state, directory);
+          const normalized = normalizeQuestionFromTool(toolPart.sessionID, toolPart.state);
+          if (normalized) {
+            for (const handler of this.questionHandlers) {
+              handler(normalized, directory);
+            }
           }
+        }
+      } else if (payload.type === "permission.asked") {
+        const permEvent = payload as PermissionAskedEvent;
+        const normalized = normalizePermissionRequest(permEvent.properties);
+        for (const handler of this.permissionHandlers) {
+          handler(normalized, directory);
         }
       } else if (payload.type === "permission.updated") {
         const permEvent = payload as PermissionUpdatedEvent;
+        const normalized = normalizeLegacyPermission(permEvent.properties);
         for (const handler of this.permissionHandlers) {
-          handler(permEvent.properties, directory);
+          handler(normalized, directory);
         }
       }
     } catch (error) {
@@ -272,4 +354,85 @@ export class SSEClient {
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
+}
+
+function normalizePermissionRequest(request: PermissionRequest): PermissionEvent {
+  const patterns = request.patterns;
+  const title = patterns.length > 0
+    ? `${request.permission}: ${patterns.join(", ")}`
+    : request.permission;
+
+  return {
+    id: request.id,
+    sessionID: request.sessionID,
+    title,
+    permissionType: request.permission,
+    patterns,
+    alwaysPatterns: request.always,
+    metadata: request.metadata,
+  };
+}
+
+function normalizeLegacyPermission(permission: PermissionLegacy): PermissionEvent {
+  const patterns = Array.isArray(permission.pattern)
+    ? permission.pattern
+    : permission.pattern
+      ? [permission.pattern]
+      : [];
+
+  return {
+    id: permission.id,
+    sessionID: permission.sessionID,
+    title: permission.title,
+    permissionType: permission.type,
+    patterns,
+    alwaysPatterns: patterns,
+    metadata: permission.metadata,
+  };
+}
+
+function normalizeQuestionRequest(request: QuestionRequest): QuestionEvent {
+  return {
+    id: request.id,
+    sessionID: request.sessionID,
+    questions: request.questions,
+  };
+}
+
+function normalizeQuestionFromTool(sessionID: string, toolState: ToolState): QuestionEvent | null {
+  if (toolState.status !== "running") {
+    return null;
+  }
+
+  const input = toolState.input as {
+    questions?: Array<{
+      question?: string;
+      header?: string;
+      options?: Array<{ label?: string; description?: string }>;
+      multiple?: boolean;
+      custom?: boolean;
+    }>;
+  };
+
+  const questions: QuestionInfo[] = input.questions?.map((item) => ({
+    question: item.question || "OpenCode is waiting for your input",
+    header: item.header,
+    options: (item.options ?? []).map((option) => ({
+      label: option.label || "Option",
+      description: option.description,
+    })),
+    multiple: item.multiple,
+    custom: item.custom,
+  })) ?? [{
+    question: "OpenCode is waiting for your input",
+    options: [],
+  }];
+
+  const firstQuestion = questions[0]?.question ?? "OpenCode is waiting for your input";
+
+  return {
+    id: `${sessionID}:${firstQuestion.slice(0, 100)}`,
+    sessionID,
+    questions,
+  };
 }

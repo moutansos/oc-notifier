@@ -4,6 +4,11 @@
 
 export type NotificationType = "idle" | "question" | "permission";
 
+export interface NotificationChoice {
+  label: string;
+  description?: string;
+}
+
 export interface Notification {
   type: NotificationType;
   sessionId: string;
@@ -18,6 +23,8 @@ export interface Notification {
   permissionTitle?: string;
   /** Permission type when type is "permission" (e.g. "edit", "bash", "webfetch") */
   permissionType?: string;
+  /** Available response choices shown in OpenCode for question/permission prompts */
+  choices?: NotificationChoice[];
 }
 
 export interface NotificationProvider {
