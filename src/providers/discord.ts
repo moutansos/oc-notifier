@@ -22,6 +22,7 @@ import { sourceLabel } from "./types.ts";
  */
 const harnessAvatarUrl: Record<NotificationSource, string> = {
   "claude-code": "https://www.google.com/s2/favicons?domain=claude.ai&sz=128",
+  "grok-code": "https://www.google.com/s2/favicons?domain=grok.com&sz=128",
   opencode: "https://www.google.com/s2/favicons?domain=opencode.ai&sz=128",
 };
 
@@ -166,9 +167,9 @@ export class DiscordProvider implements NotificationProvider {
             {
               type: 2, // Button
               style: 5, // Link button
-              label: source === "claude-code"
-                ? "Open session"
-                : "Open in OpenCode Desktop",
+              label: source === "opencode"
+                ? "Open in OpenCode Desktop"
+                : "Open session",
               url: notification.desktopUrl,
             },
           ],

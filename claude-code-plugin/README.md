@@ -21,6 +21,11 @@ Hooked events:
 | `Notification` | `permission_prompt`, `agent_needs_input` | `permission` |
 | `Notification` | `elicitation_dialog` | `question` |
 | `PermissionRequest` | all tools (incl. `AskUserQuestion`) | `permission` / `question` |
+| `Stop` | (always) | `idle` |
+
+**Permissions:** Claude fires a dedicated **`PermissionRequest`** hook when a tool needs
+approval, plus `Notification` / `permission_prompt` for the desktop-style alert. Both are
+forwarded as `permission` (`AskUserQuestion` → `question`).
 
 Subagent events (`agent_id` present) are ignored by oc-notifier.
 

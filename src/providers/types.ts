@@ -5,7 +5,7 @@
 export type NotificationType = "idle" | "question" | "permission";
 
 /** Origin of the notification event */
-export type NotificationSource = "opencode" | "claude-code";
+export type NotificationSource = "opencode" | "claude-code" | "grok-code";
 
 export interface NotificationChoice {
   label: string;
@@ -41,5 +41,12 @@ export interface NotificationProvider {
 
 /** Display name for the notification source */
 export function sourceLabel(source: NotificationSource | undefined): string {
-  return source === "claude-code" ? "Claude Code" : "OpenCode";
+  switch (source) {
+    case "claude-code":
+      return "Claude Code";
+    case "grok-code":
+      return "Grok";
+    default:
+      return "OpenCode";
+  }
 }

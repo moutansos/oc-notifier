@@ -1,13 +1,13 @@
 # oc-notifier
 
-A CLI tool that monitors [OpenCode](https://opencode.ai) sessions (and optionally [Claude Code](https://code.claude.com)) and sends push notifications when they become idle. Get notified via Discord, Microsoft Teams, or generic webhooks when your coding sessions are ready for input.
+A CLI tool that monitors [OpenCode](https://opencode.ai) sessions (and optionally [Claude Code](https://code.claude.com) / [Grok Build](https://grok.com)) and sends push notifications when they become idle. Get notified via Discord, Microsoft Teams, or generic webhooks when your coding sessions are ready for input.
 
 > **Note:** For OpenCode, this tool works best in server/client mode, where multiple clients (TUI or web/desktop) connect to a single OpenCode instance across multiple projects. In this setup, you can step away and receive notifications when any session becomes idle and ready for input.
 
 ## Features
 
 - Monitors all projects on an OpenCode server via SSE (Server-Sent Events)
-- **Claude Code support** via a thin plugin that forwards hooks to an HTTP ingest API
+- **Claude Code** and **Grok Build** support via thin plugins that forward hooks to an HTTP ingest API
 - Detects session status transitions to idle state, questions, and permission prompts
 - Sends rich notifications with project name, session title, and desktop link
 - Supports multiple notification providers simultaneously
@@ -57,7 +57,7 @@ Create a `config.json` file (see `config.example.json` for reference):
 }
 ```
 
-At least one of `opencode` or `ingest` (with `enabled: true`) is required. You can run OpenCode-only, Claude Code-only, or both.
+At least one of `opencode` or `ingest` (with `enabled: true`) is required. You can run OpenCode-only, ingest-only (Claude/Grok plugins), or both.
 
 ### OpenCode Settings
 
@@ -70,7 +70,7 @@ At least one of `opencode` or `ingest` (with `enabled: true`) is required. You c
 
 \*Required when the `opencode` block is present.
 
-### Ingest API (Claude Code / external clients)
+### Ingest API (Claude Code / Grok / external clients)
 
 | Option | Type | Required | Description |
 |--------|------|----------|-------------|
@@ -84,6 +84,7 @@ Endpoints:
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/v1/claude-code/hook` | Raw Claude Code hook JSON (used by the plugin) |
+| `POST` | `/v1/grok-code/hook` | Raw Grok Build hook JSON (used by the plugin) |
 | `POST` | `/v1/notify` | Normalized notification payload |
 | `GET` | `/health` | Liveness check |
 
@@ -171,6 +172,19 @@ claude --plugin-dir ./claude-code-plugin
 
 See [claude-code-plugin/README.md](./claude-code-plugin/README.md) for `userConfig` (notifier URL / token) and manual test curls.
 
+## Grok Build
+
+A bundled plugin under [`grok-code-plugin/`](./grok-code-plugin/) forwards Grok hooks to the ingest API (same pattern as Claude).
+
+```bash
+# Installs to ~/.grok/plugins/oc-notifier (auto-trusted)
+bun run install-grok-plugin
+```
+
+Restart Grok or run `/plugins reload`. Optional: `OC_NOTIFIER_URL` / `OC_NOTIFIER_TOKEN`.
+
+See [grok-code-plugin/README.md](./grok-code-plugin/README.md).
+
 ## Usage
 
 ### CLI
@@ -196,6 +210,7 @@ bun run src/index.ts --help
 |--------|-------|-------------|
 | `--config <path>` | `-c` | Path to config file (default: `./config.json`) |
 | `--install-claude-plugin` | | Install/upgrade Claude Code plugin to `~/.claude/skills/` (symlink on Linux/macOS, copy on Windows; safe to re-run) |
+| `--install-grok-plugin` | | Install/upgrade Grok plugin to `~/.grok/plugins/` (symlink on Linux/macOS, copy on Windows; safe to re-run) |
 | `--plugin-source <path>` | | Override plugin source directory |
 | `--plugin-target <path>` | | Override install target directory |
 | `--help` | `-h` | Show help message |
@@ -244,10 +259,10 @@ docker run -v /path/to/config.json:/config/config.json oc-notifier
    - Dispatches notifications to all enabled providers
 3. Question and permission events are forwarded similarly
 
-**Claude Code (HTTP ingest):**
+**Claude Code / Grok (HTTP ingest):**
 
-1. The Claude Code plugin hooks `Notification` and `PermissionRequest`
-2. `scripts/forward.sh` POSTs the raw hook JSON to `/v1/claude-code/hook`
+1. Plugins hook lifecycle events (`Stop`, `Notification`, …)
+2. `scripts/forward.sh` POSTs raw hook JSON to `/v1/claude-code/hook` or `/v1/grok-code/hook`
 3. oc-notifier maps the payload to a notification and dispatches to providers
 
 ```
@@ -255,7 +270,7 @@ docker run -v /path/to/config.json:/config/config.json oc-notifier
 │ OpenCode SSE   │────>│                 │     │ Discord /      │
 └────────────────┘     │   oc-notifier   │────>│ Teams /        │
 ┌────────────────┐     │                 │     │ Webhook        │
-│ Claude Code    │────>│  ingest HTTP    │     └────────────────┘
+│ Claude / Grok  │────>│  ingest HTTP    │     └────────────────┘
 │ plugin (hooks) │     └─────────────────┘
 └────────────────┘
 ```

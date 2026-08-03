@@ -1,15 +1,21 @@
 /**
- * HTTP ingest server for external notification sources (e.g. Claude Code hooks).
+ * HTTP ingest server for external notification sources (Claude Code / Grok hooks).
  *
  * Endpoints:
  *   POST /v1/notify              — normalized notification payload
  *   POST /v1/claude-code/hook    — raw Claude Code hook JSON (forwarded as-is)
+ *   POST /v1/grok-code/hook      — raw Grok Build hook JSON (forwarded as-is)
  *   GET  /health                 — liveness check
  */
 
 import type { Notification, NotificationChoice, NotificationType } from "./providers/types.ts";
 import type { IngestConfig } from "./config.ts";
 import { mapClaudeCodeHook, type ClaudeCodeHookPayload } from "./claude-code.ts";
+import {
+  mapGrokCodeHook,
+  summarizeGrokPayload,
+  type GrokCodeHookPayload,
+} from "./grok-code.ts";
 import type { Notifier } from "./notifier.ts";
 
 export class IngestServer {
@@ -34,6 +40,7 @@ export class IngestServer {
     console.log(`Ingest server listening on http://${host}:${port}`);
     console.log(`  POST /v1/notify`);
     console.log(`  POST /v1/claude-code/hook`);
+    console.log(`  POST /v1/grok-code/hook`);
     console.log(`  GET  /health`);
   }
 
@@ -64,6 +71,10 @@ export class IngestServer {
 
     if (path === "/v1/claude-code/hook") {
       return this.handleClaudeCodeHook(request);
+    }
+
+    if (path === "/v1/grok-code/hook") {
+      return this.handleGrokCodeHook(request);
     }
 
     return json({ error: "Not found" }, 404);
@@ -124,6 +135,36 @@ export class IngestServer {
     await this.notifier.send(notification);
     return json({ ok: true });
   }
+
+  private async handleGrokCodeHook(request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "Invalid JSON body" }, 400);
+    }
+
+    const payload = body as GrokCodeHookPayload;
+    // Log observed types so the allowlist in mapGrokCodeHook can be refined
+    // from real traffic (Grok does not document notificationType values).
+    console.log(`Ingest /v1/grok-code/hook: raw ${summarizeGrokPayload(payload)}`);
+
+    const notification = mapGrokCodeHook(payload);
+    const eventName = payload.hookEventName ?? payload.hook_event_name ?? "?";
+
+    if (!notification) {
+      console.log(
+        `Ingest /v1/grok-code/hook: ignored event=${eventName} notificationType=${payload.notificationType ?? payload.notification_type ?? "-"} reason=${payload.reason ?? "-"}`
+      );
+      return json({ ok: true, ignored: true });
+    }
+
+    console.log(
+      `Ingest /v1/grok-code/hook: type=${notification.type} session=${notification.sessionId} event=${eventName}`
+    );
+    await this.notifier.send(notification);
+    return json({ ok: true });
+  }
 }
 
 function json(data: unknown, status = 200): Response {
@@ -159,7 +200,7 @@ function parseNotifyBody(body: unknown): Notification {
   const desktopUrl = typeof obj.desktopUrl === "string" ? obj.desktopUrl : "";
 
   let source: Notification["source"];
-  if (obj.source === "claude-code" || obj.source === "opencode") {
+  if (obj.source === "claude-code" || obj.source === "opencode" || obj.source === "grok-code") {
     source = obj.source;
   }
 
