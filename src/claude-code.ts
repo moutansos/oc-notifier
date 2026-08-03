@@ -85,11 +85,14 @@ function mapNotificationEvent(
   const notificationType = payload.notification_type ?? "";
 
   switch (notificationType) {
-    case "idle_prompt":
+    // idle_prompt is deliberately absent: Claude Code fires it ~60s after the
+    // Stop hook for the same session, which would double-notify every turn.
+    // Stop is the idle signal because it lands immediately.
     case "agent_completed":
       return { ...base, type: "idle" };
 
-    case "permission_prompt":
+    // permission_prompt is likewise absent: it is the desktop-alert twin of the
+    // PermissionRequest hook, which carries the tool name and input.
     case "agent_needs_input":
       return {
         ...base,

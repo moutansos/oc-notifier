@@ -17,15 +17,20 @@ Hooked events:
 
 | Claude Code event | Matcher / tools | oc-notifier type |
 |-------------------|-----------------|------------------|
-| `Notification` | `idle_prompt`, `agent_completed` | `idle` |
-| `Notification` | `permission_prompt`, `agent_needs_input` | `permission` |
+| `Notification` | `agent_completed` | `idle` |
+| `Notification` | `agent_needs_input` | `permission` |
 | `Notification` | `elicitation_dialog` | `question` |
 | `PermissionRequest` | all tools (incl. `AskUserQuestion`) | `permission` / `question` |
 | `Stop` | (always) | `idle` |
 
 **Permissions:** Claude fires a dedicated **`PermissionRequest`** hook when a tool needs
-approval, plus `Notification` / `permission_prompt` for the desktop-style alert. Both are
-forwarded as `permission` (`AskUserQuestion` → `question`).
+approval (`AskUserQuestion` → `question`, everything else → `permission`).
+
+**Not hooked, on purpose:** `idle_prompt` and `permission_prompt` are the desktop-alert
+twins of `Stop` and `PermissionRequest`. Claude Code fires `idle_prompt` about 60 seconds
+after `Stop` for the same session, so forwarding both meant two notifications per turn.
+The plugin now matches only the immediate event; oc-notifier drops the twins server-side
+too, so an older plugin install cannot reintroduce the duplicate.
 
 Subagent events (`agent_id` present) are ignored by oc-notifier.
 
@@ -111,13 +116,12 @@ When enabling, Claude Code prompts for:
 ## Manual test
 
 ```bash
-# Idle-style notification
+# Idle notification (Stop is the idle signal; idle_prompt is ignored as a duplicate)
 echo '{
   "session_id": "test-session",
-  "cwd": "/tmp/demo",
-  "hook_event_name": "Notification",
-  "message": "Claude is waiting for your input",
-  "notification_type": "idle_prompt"
+  "cwd": "/home/you/project",
+  "hook_event_name": "Stop",
+  "last_assistant_message": "Done."
 }' | curl -sS -X POST http://127.0.0.1:4100/v1/claude-code/hook \
   -H 'Content-Type: application/json' \
   -d @-
@@ -125,7 +129,7 @@ echo '{
 # Permission prompt
 echo '{
   "session_id": "test-session",
-  "cwd": "/tmp/demo",
+  "cwd": "/home/you/project",
   "hook_event_name": "PermissionRequest",
   "tool_name": "Bash",
   "tool_input": { "command": "rm -rf /tmp/build", "description": "clean build" }

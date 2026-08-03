@@ -56,6 +56,13 @@ export interface Config {
   providers: ProviderConfig[];
   /** Delay in ms before sending notification after idle (default: 3000). Cancels if session goes busy. */
   debounceMs: number;
+  /**
+   * Absolute directories whose sessions never produce notifications. A session
+   * matches when its project directory is the listed directory or below it.
+   * Useful for scratch dirs used by headless probes (e.g. CodexBar's usage
+   * probe runs a Claude Code session in /tmp every minute).
+   */
+  ignoreDirectories: string[];
 }
 
 function validateOpenCodeConfig(config: unknown): OpenCodeConfig {
@@ -237,7 +244,27 @@ function validateConfig(config: unknown): Config {
     debounceMs = obj.debounceMs;
   }
 
-  return { opencode, ingest, providers, debounceMs };
+  // Validate ignoreDirectories (optional, default none)
+  let ignoreDirectories: string[] = [];
+  if (obj.ignoreDirectories !== undefined) {
+    if (!Array.isArray(obj.ignoreDirectories)) {
+      throw new Error("ignoreDirectories must be an array of strings");
+    }
+    ignoreDirectories = obj.ignoreDirectories.map((dir, i) => {
+      if (typeof dir !== "string" || !dir) {
+        throw new Error(`ignoreDirectories[${i}] must be a non-empty string`);
+      }
+      return normalizeDirectory(dir);
+    });
+  }
+
+  return { opencode, ingest, providers, debounceMs, ignoreDirectories };
+}
+
+/** Strip trailing slashes so "/tmp/" and "/tmp" compare equal (keeps root "/"). */
+export function normalizeDirectory(dir: string): string {
+  const trimmed = dir.replace(/\/+$/, "");
+  return trimmed || "/";
 }
 
 export async function loadConfig(path: string): Promise<Config> {

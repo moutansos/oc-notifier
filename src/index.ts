@@ -109,7 +109,7 @@ async function main() {
 
   // Create providers
   const providers = createProviders(config.providers);
-  const notifier = new Notifier(providers);
+  const notifier = new Notifier(providers, config.ignoreDirectories);
 
   // Start HTTP ingest server (Claude Code plugin and other clients)
   let ingestServer: IngestServer | null = null;

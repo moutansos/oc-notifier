@@ -59,6 +59,19 @@ Create a `config.json` file (see `config.example.json` for reference):
 
 At least one of `opencode` or `ingest` (with `enabled: true`) is required. You can run OpenCode-only, ingest-only (Claude/Grok plugins), or both.
 
+### General Settings
+
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| `debounceMs` | number | No | Delay before an OpenCode idle notification fires (default: `3000`). Cancelled if the session goes busy again |
+| `ignoreDirectories` | string[] | No | Absolute directories to silence. A session is dropped when its project directory is a listed directory or below it |
+
+`ignoreDirectories` applies to every source (OpenCode, Claude Code, Grok). It is
+mainly useful for scratch directories used by headless tooling — for example,
+CodexBar's usage probe starts a Claude Code session in `/tmp` about once a
+minute, and each one fires a `Stop` hook that would otherwise be reported as an
+idle session.
+
 ### OpenCode Settings
 
 | Option | Type | Required | Description |
