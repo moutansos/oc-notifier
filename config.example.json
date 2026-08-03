@@ -5,6 +5,12 @@
     "username": "opencode",
     "password": "your-password"
   },
+  "ingest": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 4100,
+    "token": "optional-shared-secret"
+  },
   "debounceMs": 3000,
   "providers": [
     {

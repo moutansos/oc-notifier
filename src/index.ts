@@ -1,9 +1,9 @@
 /**
  * oc-notifier - CLI entry point
  *
- * Connects to an OpenCode server's SSE stream and sends push notifications
- * when sessions transition to idle state, when the question tool is invoked,
- * or when a permission request is pending.
+ * Connects to an OpenCode server's SSE stream and/or listens for HTTP ingest
+ * events (Claude Code hooks) and sends push notifications when sessions
+ * become idle, when a question is asked, or when a permission request is pending.
  */
 
 import { parseArgs } from "util";
@@ -11,6 +11,8 @@ import { loadConfig } from "./config.ts";
 import { SSEClient } from "./sse-client.ts";
 import { createProviders, type Notification } from "./providers/index.ts";
 import { Notifier } from "./notifier.ts";
+import { IngestServer } from "./ingest-server.ts";
+import { installClaudePlugin } from "./install-claude-plugin.ts";
 
 import type { PermissionEvent, QuestionEvent } from "./sse-client.ts";
 import type { NotificationChoice } from "./providers/types.ts";
@@ -28,27 +30,57 @@ const { values } = parseArgs({
       short: "h",
       default: false,
     },
+    "install-claude-plugin": {
+      type: "boolean",
+      default: false,
+    },
+    "plugin-source": {
+      type: "string",
+    },
+    "plugin-target": {
+      type: "string",
+    },
   },
 });
 
 if (values.help) {
   console.log(`
-oc-notifier - OpenCode session idle notifier
+oc-notifier - OpenCode / Claude Code session idle notifier
 
 Usage:
   bun run src/index.ts [options]
 
 Options:
-  -c, --config <path>  Path to config file (default: ./config.json)
-  -h, --help           Show this help message
+  -c, --config <path>           Path to config file (default: ./config.json)
+  --install-claude-plugin       Install/upgrade the Claude Code plugin into ~/.claude/skills/
+                                Linux/macOS: symlink  |  Windows: copy
+                                Safe to re-run; replaces an existing install
+  --plugin-source <path>        Override plugin source directory
+  --plugin-target <path>        Override install target directory
+  -h, --help                    Show this help message
 
-Example:
+Examples:
   bun run src/index.ts --config /path/to/config.json
+  bun run src/index.ts --install-claude-plugin
 `);
   process.exit(0);
 }
 
 async function main() {
+  if (values["install-claude-plugin"]) {
+    const summary = await installClaudePlugin({
+      sourceDir: values["plugin-source"],
+      targetDir: values["plugin-target"],
+    });
+    console.log(summary);
+    console.log("");
+    console.log("Next steps:");
+    console.log("  1. Ensure oc-notifier is running with ingest.enabled: true");
+    console.log("  2. Restart Claude Code or run /reload-plugins");
+    console.log("  3. Configure notifier URL / token if prompted (plugin userConfig)");
+    process.exit(0);
+  }
+
   const configPath = values.config!;
 
   console.log(`Loading config from ${configPath}...`);
@@ -58,8 +90,49 @@ async function main() {
   const providers = createProviders(config.providers);
   const notifier = new Notifier(providers);
 
-  // Create SSE client
-  const sseClient = new SSEClient(config.opencode);
+  // Start HTTP ingest server (Claude Code plugin and other clients)
+  let ingestServer: IngestServer | null = null;
+  if (config.ingest?.enabled) {
+    ingestServer = new IngestServer(config.ingest, notifier);
+    ingestServer.start();
+  }
+
+  // OpenCode SSE monitoring (optional when only ingest is used)
+  let sseClient: SSEClient | null = null;
+  if (config.opencode) {
+    sseClient = setupOpenCodeMonitoring(config.opencode, config.debounceMs, notifier);
+  } else {
+    console.log("OpenCode SSE monitoring disabled (no opencode config)");
+  }
+
+  // Handle graceful shutdown
+  const shutdown = () => {
+    console.log("\nShutting down...");
+    sseClient?.stop();
+    ingestServer?.stop();
+    process.exit(0);
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+
+  console.log("Starting oc-notifier...");
+
+  if (sseClient) {
+    await sseClient.start();
+  } else {
+    // Keep process alive for ingest-only mode
+    console.log("Running in ingest-only mode (waiting for HTTP events)...");
+    await new Promise(() => {});
+  }
+}
+
+function setupOpenCodeMonitoring(
+  opencodeConfig: NonNullable<Awaited<ReturnType<typeof loadConfig>>["opencode"]>,
+  debounceMs: number,
+  notifier: Notifier
+): SSEClient {
+  const sseClient = new SSEClient(opencodeConfig);
 
   // Track previous session status to detect transitions TO idle
   // Map of sessionID -> { status, lastSeen }
@@ -89,7 +162,7 @@ async function main() {
     }
   }, CLEANUP_INTERVAL_MS);
 
-  console.log(`Debounce delay: ${config.debounceMs}ms`);
+  console.log(`Debounce delay: ${debounceMs}ms`);
 
   // Handle session status events (from all projects via /global/event)
   sseClient.onSessionStatus(async (event, directory) => {
@@ -129,7 +202,7 @@ async function main() {
         return;
       }
 
-      console.log(`Session ${sessionID} went idle, scheduling notification in ${config.debounceMs}ms...`);
+      console.log(`Session ${sessionID} went idle, scheduling notification in ${debounceMs}ms...`);
 
       // Schedule the notification after debounce delay
       const timer = setTimeout(async () => {
@@ -157,17 +230,18 @@ async function main() {
 
         const notification: Notification = {
           type: "idle",
+          source: "opencode",
           sessionId: sessionID,
           sessionTitle: sessionInfo?.title || sessionID,
           projectId: sessionInfo?.projectID || "",
           projectDirectory: directory,
-          desktopUrl: buildDesktopUrl(config.opencode.desktopBaseUrl, directory, sessionID),
+          desktopUrl: buildDesktopUrl(opencodeConfig.desktopBaseUrl, directory, sessionID),
           timestamp: new Date(),
         };
 
         console.log(`[DEBUG] Sending notification: ${JSON.stringify(notification)}`);
         await notifier.send(notification);
-      }, config.debounceMs);
+      }, debounceMs);
 
       pendingNotifications.set(sessionID, timer);
     }
@@ -216,11 +290,12 @@ async function main() {
 
     const notification: Notification = {
       type: "question",
+      source: "opencode",
       sessionId: sessionID,
       sessionTitle: sessionInfo?.title || sessionID,
       projectId: sessionInfo?.projectID || "",
       projectDirectory: directory,
-      desktopUrl: buildDesktopUrl(config.opencode.desktopBaseUrl, directory, sessionID),
+      desktopUrl: buildDesktopUrl(opencodeConfig.desktopBaseUrl, directory, sessionID),
       timestamp: new Date(),
       question: questionText,
       choices: buildQuestionChoices(question),
@@ -272,11 +347,12 @@ async function main() {
 
     const notification: Notification = {
       type: "permission",
+      source: "opencode",
       sessionId: sessionID,
       sessionTitle: sessionInfo?.title || sessionID,
       projectId: sessionInfo?.projectID || "",
       projectDirectory: directory,
-      desktopUrl: buildDesktopUrl(config.opencode.desktopBaseUrl, directory, sessionID),
+      desktopUrl: buildDesktopUrl(opencodeConfig.desktopBaseUrl, directory, sessionID),
       timestamp: new Date(),
       permissionTitle: permission.title,
       permissionType: permission.permissionType,
@@ -286,18 +362,7 @@ async function main() {
     await notifier.send(notification);
   });
 
-  // Handle graceful shutdown
-  const shutdown = () => {
-    console.log("\nShutting down...");
-    sseClient.stop();
-    process.exit(0);
-  };
-
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-
-  console.log("Starting oc-notifier...");
-  await sseClient.start();
+  return sseClient;
 }
 
 function formatQuestionText(question: QuestionEvent): string {

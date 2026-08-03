@@ -9,6 +9,17 @@ export interface OpenCodeConfig {
   password?: string;
 }
 
+/** HTTP ingest API for external sources such as the Claude Code plugin */
+export interface IngestConfig {
+  enabled: boolean;
+  /** Bind address (default: 127.0.0.1) */
+  host: string;
+  /** Listen port (default: 4100; avoid OpenCode's common 4096/4097) */
+  port: number;
+  /** Optional bearer token required on ingest requests */
+  token?: string;
+}
+
 export interface DiscordProviderConfig {
   type: "discord";
   enabled: boolean;
@@ -32,7 +43,16 @@ export interface MSTeamsProviderConfig {
 export type ProviderConfig = DiscordProviderConfig | WebhookProviderConfig | MSTeamsProviderConfig;
 
 export interface Config {
-  opencode: OpenCodeConfig;
+  /**
+   * OpenCode SSE monitoring. Optional when ingest is enabled (Claude Code only).
+   * When present, connects to OpenCode's global event stream.
+   */
+  opencode?: OpenCodeConfig;
+  /**
+   * HTTP ingest server for external clients (Claude Code plugin).
+   * Optional when opencode is configured.
+   */
+  ingest?: IngestConfig;
   providers: ProviderConfig[];
   /** Delay in ms before sending notification after idle (default: 3000). Cancels if session goes busy. */
   debounceMs: number;
@@ -66,6 +86,43 @@ function validateOpenCodeConfig(config: unknown): OpenCodeConfig {
     desktopBaseUrl: obj.desktopBaseUrl,
     username: obj.username as string | undefined,
     password: obj.password as string | undefined,
+  };
+}
+
+function validateIngestConfig(config: unknown): IngestConfig {
+  if (typeof config !== "object" || config === null) {
+    throw new Error("ingest config must be an object");
+  }
+
+  const obj = config as Record<string, unknown>;
+
+  const enabled = obj.enabled === true;
+
+  let host = "127.0.0.1";
+  if (obj.host !== undefined) {
+    if (typeof obj.host !== "string" || !obj.host) {
+      throw new Error("ingest.host must be a non-empty string");
+    }
+    host = obj.host;
+  }
+
+  let port = 4100;
+  if (obj.port !== undefined) {
+    if (typeof obj.port !== "number" || !Number.isInteger(obj.port) || obj.port < 1 || obj.port > 65535) {
+      throw new Error("ingest.port must be an integer between 1 and 65535");
+    }
+    port = obj.port;
+  }
+
+  if (obj.token !== undefined && typeof obj.token !== "string") {
+    throw new Error("ingest.token must be a string if provided");
+  }
+
+  return {
+    enabled,
+    host,
+    port,
+    token: obj.token as string | undefined,
   };
 }
 
@@ -150,7 +207,20 @@ function validateConfig(config: unknown): Config {
 
   const obj = config as Record<string, unknown>;
 
-  const opencode = validateOpenCodeConfig(obj.opencode);
+  const opencode = obj.opencode !== undefined
+    ? validateOpenCodeConfig(obj.opencode)
+    : undefined;
+
+  const ingest = obj.ingest !== undefined
+    ? validateIngestConfig(obj.ingest)
+    : undefined;
+
+  const ingestEnabled = ingest?.enabled === true;
+  if (!opencode && !ingestEnabled) {
+    throw new Error(
+      "At least one of opencode or ingest (with enabled: true) must be configured"
+    );
+  }
 
   if (!Array.isArray(obj.providers)) {
     throw new Error("providers must be an array");
@@ -167,7 +237,7 @@ function validateConfig(config: unknown): Config {
     debounceMs = obj.debounceMs;
   }
 
-  return { opencode, providers, debounceMs };
+  return { opencode, ingest, providers, debounceMs };
 }
 
 export async function loadConfig(path: string): Promise<Config> {

@@ -18,6 +18,10 @@ bun run start                              # Uses default ./config.json
 bun run src/index.ts --config <path>       # Custom config path
 bun run src/index.ts -c ./my-config.json
 
+# Install/upgrade Claude Code plugin (~/.claude/skills/oc-notifier)
+# Linux/macOS: symlink  |  Windows: copy  |  safe to re-run
+bun run install-claude-plugin
+
 # Development mode (auto-reload on changes)
 bun run dev
 
@@ -59,12 +63,20 @@ src/
 ├── config.ts             # Configuration loading & validation
 ├── notifier.ts           # Notification dispatcher
 ├── sse-client.ts         # SSE connection to OpenCode server
+├── ingest-server.ts      # HTTP ingest API for Claude Code / external clients
+├── claude-code.ts        # Map Claude Code hook payloads → Notification
+├── install-claude-plugin.ts  # --install-claude-plugin (symlink/copy)
 └── providers/
     ├── index.ts          # Provider factory/registry
     ├── types.ts          # Provider interfaces & types
     ├── discord.ts        # Discord webhook provider
     ├── msteams.ts        # Microsoft Teams provider
     └── webhook.ts        # Generic webhook provider
+
+claude-code-plugin/       # Claude Code plugin (hooks only; oc-notifier owns delivery)
+├── .claude-plugin/plugin.json
+├── hooks/hooks.json
+└── scripts/forward.sh
 ```
 
 ## TypeScript Configuration

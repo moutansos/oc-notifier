@@ -28,6 +28,7 @@ export class WebhookProvider implements NotificationProvider {
 
     const body: Record<string, unknown> = {
       event: eventType,
+      source: notification.source ?? "opencode",
       session: {
         id: notification.sessionId,
         title: notification.sessionTitle,

@@ -5,6 +5,7 @@
 
 import type { MSTeamsProviderConfig } from "../config.ts";
 import type { Notification, NotificationProvider } from "./types.ts";
+import { sourceLabel } from "./types.ts";
 
 export class MSTeamsProvider implements NotificationProvider {
   readonly type = "msteams";
@@ -18,7 +19,12 @@ export class MSTeamsProvider implements NotificationProvider {
 
   async send(notification: Notification): Promise<void> {
     // Extract just the project folder name from the full path
-    const projectName = notification.projectDirectory.split("/").pop() || notification.projectDirectory;
+    const projectName =
+      notification.projectDirectory.split("/").filter(Boolean).pop() ||
+      notification.projectDirectory ||
+      "project";
+    const source = sourceLabel(notification.source);
+    const hasLink = Boolean(notification.desktopUrl);
 
     const isQuestion = notification.type === "question";
     const isPermission = notification.type === "permission";
@@ -43,6 +49,10 @@ export class MSTeamsProvider implements NotificationProvider {
       {
         type: "FactSet",
         facts: [
+          {
+            title: "Source",
+            value: source,
+          },
           {
             title: "Project",
             value: projectName,
@@ -79,13 +89,34 @@ export class MSTeamsProvider implements NotificationProvider {
       });
     }
 
-    bodyElements.push({
-      type: "TextBlock",
-      text: notification.projectDirectory,
-      size: "Small",
-      isSubtle: true,
-      wrap: true,
-    });
+    if (notification.projectDirectory) {
+      bodyElements.push({
+        type: "TextBlock",
+        text: notification.projectDirectory,
+        size: "Small",
+        isSubtle: true,
+        wrap: true,
+      });
+    }
+
+    const content: Record<string, unknown> = {
+      $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+      type: "AdaptiveCard",
+      version: "1.4",
+      body: bodyElements,
+    };
+
+    if (hasLink) {
+      content.actions = [
+        {
+          type: "Action.OpenUrl",
+          title: notification.source === "claude-code"
+            ? "Open session"
+            : "Open in OpenCode Desktop",
+          url: notification.desktopUrl,
+        },
+      ];
+    }
 
     // Adaptive Card format for MS Teams
     const card = {
@@ -93,19 +124,7 @@ export class MSTeamsProvider implements NotificationProvider {
       attachments: [
         {
           contentType: "application/vnd.microsoft.card.adaptive",
-          content: {
-            $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
-            type: "AdaptiveCard",
-            version: "1.4",
-            body: bodyElements,
-            actions: [
-              {
-                type: "Action.OpenUrl",
-                title: "Open in OpenCode Desktop",
-                url: notification.desktopUrl,
-              },
-            ],
-          },
+          content,
         },
       ],
     };

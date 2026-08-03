@@ -1,9 +1,29 @@
 /**
  * Discord webhook notification provider
+ *
+ * Per-message overrides:
+ * - username: "{Harness} · {machine}"
+ * - avatar_url: harness icon (Claude vs OpenCode)
  */
 
+import { hostname } from "node:os";
 import type { DiscordProviderConfig } from "../config.ts";
-import type { Notification, NotificationChoice, NotificationProvider } from "./types.ts";
+import type {
+  Notification,
+  NotificationChoice,
+  NotificationProvider,
+  NotificationSource,
+} from "./types.ts";
+import { sourceLabel } from "./types.ts";
+
+/**
+ * Public HTTPS icons Discord can fetch (no CORS required — server-side).
+ * Prefer PNG favicons; Discord is flaky with SVG for webhook avatars.
+ */
+const harnessAvatarUrl: Record<NotificationSource, string> = {
+  "claude-code": "https://www.google.com/s2/favicons?domain=claude.ai&sz=128",
+  opencode: "https://www.google.com/s2/favicons?domain=opencode.ai&sz=128",
+};
 
 function truncateField(value: string, maxLength = 1024): string {
   return value.length > maxLength ? value.slice(0, maxLength - 3) + "..." : value;
@@ -18,6 +38,12 @@ function formatChoices(choices: NotificationChoice[]): string {
     .join("\n");
 }
 
+function machineName(): string {
+  const raw = hostname();
+  // Short hostname (strip domain): "host.local" → "host"
+  return raw.split(".")[0] || raw || "unknown";
+}
+
 export class DiscordProvider implements NotificationProvider {
   readonly type = "discord";
   readonly enabled: boolean;
@@ -30,21 +56,41 @@ export class DiscordProvider implements NotificationProvider {
 
   async send(notification: Notification): Promise<void> {
     // Extract just the project folder name from the full path
-    const projectName = notification.projectDirectory.split("/").pop() || notification.projectDirectory;
+    const projectName =
+      notification.projectDirectory.split("/").filter(Boolean).pop() ||
+      notification.projectDirectory ||
+      "project";
+    const source = notification.source ?? "opencode";
+    const harness = sourceLabel(source);
+    const machine = machineName();
+    // Discord author line + embed title: harness and machine
+    const identity = `${harness} · ${machine}`;
+    const hasLink = Boolean(notification.desktopUrl);
 
     const isQuestion = notification.type === "question";
     const isPermission = notification.type === "permission";
-    const title = isPermission
-      ? `Permission Required: ${projectName}`
+    const eventLabel = isPermission
+      ? "Permission required"
       : isQuestion
-        ? `Question Pending: ${projectName}`
-        : `Session Idle: ${projectName}`;
+        ? "Question pending"
+        : "Session idle";
     const status = isPermission
       ? "Waiting for permission"
-      : isQuestion ? "Waiting for your response" : "Ready for input";
-    const color = isPermission ? 0xed4245 : isQuestion ? 0xffa500 : 0x5865f2; // Red for permission, orange for question, blurple for idle
+      : isQuestion
+        ? "Waiting for your response"
+        : "Ready for input";
+    const color = isPermission
+      ? 0xed4245
+      : isQuestion
+        ? 0xffa500
+        : 0x5865f2; // Red / orange / blurple
 
     const fields = [
+      {
+        name: "Event",
+        value: eventLabel,
+        inline: true,
+      },
       {
         name: "Project",
         value: projectName,
@@ -88,33 +134,47 @@ export class DiscordProvider implements NotificationProvider {
       });
     }
 
-    const embed = {
-      title,
+    const footerText = notification.projectDirectory
+      ? notification.projectDirectory
+      : identity;
+
+    const embed: Record<string, unknown> = {
+      title: identity,
       color,
       fields,
-      url: notification.desktopUrl,
       timestamp: notification.timestamp.toISOString(),
       footer: {
-        text: `OpenCode | ${notification.projectDirectory}`,
+        text: footerText,
       },
     };
 
-    const body = {
+    if (hasLink) {
+      embed.url = notification.desktopUrl;
+    }
+
+    const body: Record<string, unknown> = {
+      username: identity,
+      avatar_url: harnessAvatarUrl[source],
       embeds: [embed],
-      components: [
+    };
+
+    if (hasLink) {
+      body.components = [
         {
           type: 1, // Action row
           components: [
             {
               type: 2, // Button
               style: 5, // Link button
-              label: "Open in OpenCode Desktop",
+              label: source === "claude-code"
+                ? "Open session"
+                : "Open in OpenCode Desktop",
               url: notification.desktopUrl,
             },
           ],
         },
-      ],
-    };
+      ];
+    }
 
     const response = await fetch(this.webhookUrl, {
       method: "POST",

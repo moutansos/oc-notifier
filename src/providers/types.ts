@@ -4,6 +4,9 @@
 
 export type NotificationType = "idle" | "question" | "permission";
 
+/** Origin of the notification event */
+export type NotificationSource = "opencode" | "claude-code";
+
 export interface NotificationChoice {
   label: string;
   description?: string;
@@ -11,10 +14,13 @@ export interface NotificationChoice {
 
 export interface Notification {
   type: NotificationType;
+  /** Where the event came from (defaults to "opencode") */
+  source?: NotificationSource;
   sessionId: string;
   sessionTitle: string;
   projectId: string;
   projectDirectory: string;
+  /** Deep link or related URL; may be empty when no UI link is available */
   desktopUrl: string;
   timestamp: Date;
   /** Question text when type is "question" */
@@ -23,7 +29,7 @@ export interface Notification {
   permissionTitle?: string;
   /** Permission type when type is "permission" (e.g. "edit", "bash", "webfetch") */
   permissionType?: string;
-  /** Available response choices shown in OpenCode for question/permission prompts */
+  /** Available response choices shown for question/permission prompts */
   choices?: NotificationChoice[];
 }
 
@@ -31,4 +37,9 @@ export interface NotificationProvider {
   readonly type: string;
   readonly enabled: boolean;
   send(notification: Notification): Promise<void>;
+}
+
+/** Display name for the notification source */
+export function sourceLabel(source: NotificationSource | undefined): string {
+  return source === "claude-code" ? "Claude Code" : "OpenCode";
 }

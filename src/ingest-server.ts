@@ -1,0 +1,205 @@
+/**
+ * HTTP ingest server for external notification sources (e.g. Claude Code hooks).
+ *
+ * Endpoints:
+ *   POST /v1/notify              — normalized notification payload
+ *   POST /v1/claude-code/hook    — raw Claude Code hook JSON (forwarded as-is)
+ *   GET  /health                 — liveness check
+ */
+
+import type { Notification, NotificationChoice, NotificationType } from "./providers/types.ts";
+import type { IngestConfig } from "./config.ts";
+import { mapClaudeCodeHook, type ClaudeCodeHookPayload } from "./claude-code.ts";
+import type { Notifier } from "./notifier.ts";
+
+export class IngestServer {
+  private readonly config: IngestConfig;
+  private readonly notifier: Notifier;
+  private server: ReturnType<typeof Bun.serve> | null = null;
+
+  constructor(config: IngestConfig, notifier: Notifier) {
+    this.config = config;
+    this.notifier = notifier;
+  }
+
+  start(): void {
+    const { host, port } = this.config;
+
+    this.server = Bun.serve({
+      hostname: host,
+      port,
+      fetch: (request) => this.handleRequest(request),
+    });
+
+    console.log(`Ingest server listening on http://${host}:${port}`);
+    console.log(`  POST /v1/notify`);
+    console.log(`  POST /v1/claude-code/hook`);
+    console.log(`  GET  /health`);
+  }
+
+  stop(): void {
+    this.server?.stop(true);
+    this.server = null;
+  }
+
+  private async handleRequest(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const path = url.pathname;
+
+    if (request.method === "GET" && path === "/health") {
+      return json({ ok: true });
+    }
+
+    if (request.method !== "POST") {
+      return json({ error: "Method not allowed" }, 405);
+    }
+
+    if (!this.authorize(request)) {
+      return json({ error: "Unauthorized" }, 401);
+    }
+
+    if (path === "/v1/notify") {
+      return this.handleNotify(request);
+    }
+
+    if (path === "/v1/claude-code/hook") {
+      return this.handleClaudeCodeHook(request);
+    }
+
+    return json({ error: "Not found" }, 404);
+  }
+
+  private authorize(request: Request): boolean {
+    if (!this.config.token) {
+      return true;
+    }
+
+    const header = request.headers.get("authorization") ?? "";
+    const expected = `Bearer ${this.config.token}`;
+    return header === expected;
+  }
+
+  private async handleNotify(request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "Invalid JSON body" }, 400);
+    }
+
+    try {
+      const notification = parseNotifyBody(body);
+      console.log(
+        `Ingest /v1/notify: type=${notification.type} source=${notification.source ?? "opencode"} session=${notification.sessionId}`
+      );
+      await this.notifier.send(notification);
+      return json({ ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return json({ error: message }, 400);
+    }
+  }
+
+  private async handleClaudeCodeHook(request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "Invalid JSON body" }, 400);
+    }
+
+    const payload = body as ClaudeCodeHookPayload;
+    const notification = mapClaudeCodeHook(payload);
+
+    if (!notification) {
+      console.log(
+        `Ingest /v1/claude-code/hook: ignored event=${payload.hook_event_name ?? "?"} type=${payload.notification_type ?? "-"} agent=${payload.agent_id ?? "-"}`
+      );
+      return json({ ok: true, ignored: true });
+    }
+
+    console.log(
+      `Ingest /v1/claude-code/hook: type=${notification.type} session=${notification.sessionId} event=${payload.hook_event_name}`
+    );
+    await this.notifier.send(notification);
+    return json({ ok: true });
+  }
+}
+
+function json(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function parseNotifyBody(body: unknown): Notification {
+  if (typeof body !== "object" || body === null) {
+    throw new Error("Body must be a JSON object");
+  }
+
+  const obj = body as Record<string, unknown>;
+
+  const type = obj.type;
+  if (type !== "idle" && type !== "question" && type !== "permission") {
+    throw new Error('type must be "idle", "question", or "permission"');
+  }
+
+  if (typeof obj.sessionId !== "string" || !obj.sessionId) {
+    throw new Error("sessionId is required and must be a string");
+  }
+
+  const projectDirectory =
+    typeof obj.projectDirectory === "string" ? obj.projectDirectory : "";
+  const sessionTitle =
+    typeof obj.sessionTitle === "string" && obj.sessionTitle
+      ? obj.sessionTitle
+      : obj.sessionId;
+  const projectId = typeof obj.projectId === "string" ? obj.projectId : "";
+  const desktopUrl = typeof obj.desktopUrl === "string" ? obj.desktopUrl : "";
+
+  let source: Notification["source"];
+  if (obj.source === "claude-code" || obj.source === "opencode") {
+    source = obj.source;
+  }
+
+  const notification: Notification = {
+    type: type as NotificationType,
+    source,
+    sessionId: obj.sessionId,
+    sessionTitle,
+    projectId,
+    projectDirectory,
+    desktopUrl,
+    timestamp: new Date(),
+  };
+
+  if (typeof obj.question === "string") {
+    notification.question = obj.question;
+  }
+  if (typeof obj.permissionTitle === "string") {
+    notification.permissionTitle = obj.permissionTitle;
+  }
+  if (typeof obj.permissionType === "string") {
+    notification.permissionType = obj.permissionType;
+  }
+  if (Array.isArray(obj.choices)) {
+    notification.choices = parseChoices(obj.choices);
+  }
+
+  return notification;
+}
+
+function parseChoices(choices: unknown[]): NotificationChoice[] {
+  const result: NotificationChoice[] = [];
+  for (const item of choices) {
+    if (typeof item !== "object" || item === null) continue;
+    const c = item as Record<string, unknown>;
+    if (typeof c.label !== "string" || !c.label) continue;
+    result.push({
+      label: c.label,
+      description: typeof c.description === "string" ? c.description : undefined,
+    });
+  }
+  return result;
+}
