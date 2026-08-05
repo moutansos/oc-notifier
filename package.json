@@ -9,7 +9,8 @@
     "dev": "bun run --watch src/index.ts",
     "install-claude-plugin": "bun run src/index.ts --install-claude-plugin",
     "install-grok-plugin": "bun run src/index.ts --install-grok-plugin",
-    "install-codex-plugin": "bun run src/index.ts --install-codex-plugin"
+    "install-codex-plugin": "bun run src/index.ts --install-codex-plugin",
+    "install-copilot-plugin": "bun run src/index.ts --install-copilot-plugin"
   },
   "devDependencies": {
     "@types/bun": "latest"

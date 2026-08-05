@@ -28,6 +28,9 @@ bun run install-grok-plugin
 # Install/upgrade Codex hooks (~/.codex/hooks/oc-notifier + hooks.json merge)
 bun run install-codex-plugin
 
+# Install/upgrade Copilot CLI hooks (~/.copilot/hooks/oc-notifier + oc-notifier.json)
+bun run install-copilot-plugin
+
 # Development mode (auto-reload on changes)
 bun run dev
 
@@ -69,14 +72,16 @@ src/
 ├── config.ts             # Configuration loading & validation
 ├── notifier.ts           # Notification dispatcher
 ├── sse-client.ts         # SSE connection to OpenCode server
-├── ingest-server.ts      # HTTP ingest API for Claude / Grok / Codex / external clients
+├── ingest-server.ts      # HTTP ingest API for Claude / Grok / Codex / Copilot / external clients
 ├── claude-code.ts        # Map Claude Code hook payloads → Notification
 ├── grok-code.ts          # Map Grok hook payloads → Notification
 ├── codex.ts              # Map Codex CLI hook payloads → Notification
+├── copilot-cli.ts        # Map Copilot CLI hook payloads → Notification
 ├── install-plugin.ts         # Shared symlink/copy install helper
 ├── install-claude-plugin.ts  # --install-claude-plugin
 ├── install-grok-plugin.ts    # --install-grok-plugin
 ├── install-codex-plugin.ts   # --install-codex-plugin
+├── install-copilot-plugin.ts # --install-copilot-plugin
 └── providers/
     ├── index.ts          # Provider factory/registry
     ├── types.ts          # Provider interfaces & types
@@ -96,6 +101,10 @@ grok-code-plugin/         # Grok Build plugin (hooks only)
 
 codex-plugin/             # Codex CLI hooks (Stop + PermissionRequest)
 ├── .codex-plugin/plugin.json
+├── hooks/hooks.json
+└── scripts/forward.sh
+
+copilot-plugin/           # Copilot CLI hooks (agentStop + notification)
 ├── hooks/hooks.json
 └── scripts/forward.sh
 ```

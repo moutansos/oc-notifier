@@ -5,7 +5,12 @@
 export type NotificationType = "idle" | "question" | "permission";
 
 /** Origin of the notification event */
-export type NotificationSource = "opencode" | "claude-code" | "grok-code" | "codex";
+export type NotificationSource =
+  | "opencode"
+  | "claude-code"
+  | "grok-code"
+  | "codex"
+  | "copilot-cli";
 
 export interface NotificationChoice {
   label: string;
@@ -48,6 +53,8 @@ export function sourceLabel(source: NotificationSource | undefined): string {
       return "Grok";
     case "codex":
       return "Codex";
+    case "copilot-cli":
+      return "Copilot CLI";
     default:
       return "OpenCode";
   }

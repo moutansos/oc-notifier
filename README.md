@@ -1,13 +1,13 @@
 # oc-notifier
 
-A CLI tool that monitors [OpenCode](https://opencode.ai) sessions (and optionally [Claude Code](https://code.claude.com) / [Grok Build](https://grok.com) / [Codex CLI](https://learn.chatgpt.com/codex/cli)) and sends push notifications when they become idle. Get notified via Discord, Microsoft Teams, or generic webhooks when your coding sessions are ready for input.
+A CLI tool that monitors [OpenCode](https://opencode.ai) sessions (and optionally [Claude Code](https://code.claude.com) / [Grok Build](https://grok.com) / [Codex CLI](https://learn.chatgpt.com/codex/cli) / [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli/overview)) and sends push notifications when they become idle. Get notified via Discord, Microsoft Teams, or generic webhooks when your coding sessions are ready for input.
 
 > **Note:** For OpenCode, this tool works best in server/client mode, where multiple clients (TUI or web/desktop) connect to a single OpenCode instance across multiple projects. In this setup, you can step away and receive notifications when any session becomes idle and ready for input.
 
 ## Features
 
 - Monitors all projects on an OpenCode server via SSE (Server-Sent Events)
-- **Claude Code**, **Grok Build**, and **Codex CLI** support via thin plugins/hooks that forward events to an HTTP ingest API
+- **Claude Code**, **Grok Build**, **Codex CLI**, and **GitHub Copilot CLI** support via thin plugins/hooks that forward events to an HTTP ingest API
 - Detects session status transitions to idle state, questions, and permission prompts
 - Sends rich notifications with project name, session title, and desktop link
 - Supports multiple notification providers simultaneously
@@ -57,7 +57,7 @@ Create a `config.json` file (see `config.example.json` for reference):
 }
 ```
 
-At least one of `opencode` or `ingest` (with `enabled: true`) is required. You can run OpenCode-only, ingest-only (Claude/Grok/Codex plugins), or both.
+At least one of `opencode` or `ingest` (with `enabled: true`) is required. You can run OpenCode-only, ingest-only (Claude/Grok/Codex/Copilot plugins), or both.
 
 ### General Settings
 
@@ -66,7 +66,8 @@ At least one of `opencode` or `ingest` (with `enabled: true`) is required. You c
 | `debounceMs` | number | No | Delay before an OpenCode idle notification fires (default: `3000`). Cancelled if the session goes busy again |
 | `ignoreDirectories` | string[] | No | Absolute directories to silence. A session is dropped when its project directory is a listed directory or below it |
 
-`ignoreDirectories` applies to every source (OpenCode, Claude Code, Grok, Codex).
+`ignoreDirectories` applies to every source (OpenCode, Claude Code, Grok, Codex,
+Copilot CLI).
 It is mainly useful for scratch directories used by headless tooling — for example,
 CodexBar's usage probe starts a Claude Code session in `/tmp` about once a
 minute, and each one fires a `Stop` hook that would otherwise be reported as an
@@ -83,7 +84,7 @@ idle session.
 
 \*Required when the `opencode` block is present.
 
-### Ingest API (Claude Code / Grok / Codex / external clients)
+### Ingest API (Claude Code / Grok / Codex / Copilot CLI / external clients)
 
 | Option | Type | Required | Description |
 |--------|------|----------|-------------|
@@ -99,6 +100,7 @@ Endpoints:
 | `POST` | `/v1/claude-code/hook` | Raw Claude Code hook JSON (used by the plugin) |
 | `POST` | `/v1/grok-code/hook` | Raw Grok Build hook JSON (used by the plugin) |
 | `POST` | `/v1/codex/hook` | Raw Codex CLI hook JSON (used by the hooks install) |
+| `POST` | `/v1/copilot-cli/hook` | Raw Copilot CLI hook JSON (used by the hooks install) |
 | `POST` | `/v1/notify` | Normalized notification payload |
 | `GET` | `/health` | Liveness check |
 
@@ -216,6 +218,27 @@ Then in Codex run `/hooks` and **trust** the new oc-notifier entries. Optional:
 
 See [codex-plugin/README.md](./codex-plugin/README.md).
 
+## GitHub Copilot CLI
+
+A bundled integration under [`copilot-plugin/`](./copilot-plugin/) registers
+Copilot CLI lifecycle hooks that forward **agentStop** (idle) and
+**notification** events (`permission_prompt` / `elicitation_dialog`) to the
+ingest API.
+
+```bash
+# Installs scripts to ~/.copilot/hooks/oc-notifier
+# Writes ~/.copilot/hooks/oc-notifier.json
+bun run install-copilot-plugin
+```
+
+Restart Copilot CLI so hooks reload. Optional: `OC_NOTIFIER_URL` / `OC_NOTIFIER_TOKEN`.
+
+> **Note:** We hook `notification` / `permission_prompt` rather than
+> `permissionRequest`. The latter fires *before* auto-allow rules and would
+> spam for tools that never show a UI.
+
+See [copilot-plugin/README.md](./copilot-plugin/README.md).
+
 ## Usage
 
 ### CLI
@@ -243,6 +266,7 @@ bun run src/index.ts --help
 | `--install-claude-plugin` | | Install/upgrade Claude Code plugin to `~/.claude/skills/` (symlink on Linux/macOS, copy on Windows; safe to re-run) |
 | `--install-grok-plugin` | | Install/upgrade Grok plugin to `~/.grok/plugins/` (symlink on Linux/macOS, copy on Windows; safe to re-run) |
 | `--install-codex-plugin` | | Install/upgrade Codex hooks under `~/.codex/hooks/oc-notifier` and merge into `~/.codex/hooks.json` (safe to re-run) |
+| `--install-copilot-plugin` | | Install/upgrade Copilot CLI hooks under `~/.copilot/hooks/oc-notifier` and write `oc-notifier.json` (safe to re-run) |
 | `--plugin-source <path>` | | Override plugin source directory |
 | `--plugin-target <path>` | | Override install target directory |
 | `--help` | `-h` | Show help message |
@@ -291,10 +315,11 @@ docker run -v /path/to/config.json:/config/config.json oc-notifier
    - Dispatches notifications to all enabled providers
 3. Question and permission events are forwarded similarly
 
-**Claude Code / Grok / Codex (HTTP ingest):**
+**Claude Code / Grok / Codex / Copilot CLI (HTTP ingest):**
 
-1. Plugins/hooks capture lifecycle events (`Stop`, `PermissionRequest`, …)
-2. `scripts/forward.sh` POSTs raw hook JSON to `/v1/claude-code/hook`, `/v1/grok-code/hook`, or `/v1/codex/hook`
+1. Plugins/hooks capture lifecycle events (`Stop` / `agentStop`, `PermissionRequest`, `Notification`, …)
+2. `scripts/forward.sh` POSTs raw hook JSON to `/v1/claude-code/hook`, `/v1/grok-code/hook`,
+   `/v1/codex/hook`, or `/v1/copilot-cli/hook`
 3. oc-notifier maps the payload to a notification and dispatches to providers
 
 ```
@@ -303,7 +328,8 @@ docker run -v /path/to/config.json:/config/config.json oc-notifier
 └────────────────┘     │   oc-notifier   │────>│ Teams /        │
 ┌────────────────┐     │                 │     │ Webhook        │
 │ Claude / Grok  │────>│  ingest HTTP    │     └────────────────┘
-│ / Codex hooks  │     └─────────────────┘
+│ / Codex /      │     └─────────────────┘
+│ Copilot hooks  │
 └────────────────┘
 ```
 

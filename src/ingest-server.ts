@@ -1,12 +1,13 @@
 /**
  * HTTP ingest server for external notification sources
- * (Claude Code / Grok / Codex hooks).
+ * (Claude Code / Grok / Codex / Copilot CLI hooks).
  *
  * Endpoints:
  *   POST /v1/notify              — normalized notification payload
  *   POST /v1/claude-code/hook    — raw Claude Code hook JSON (forwarded as-is)
  *   POST /v1/grok-code/hook      — raw Grok Build hook JSON (forwarded as-is)
  *   POST /v1/codex/hook          — raw Codex CLI hook JSON (forwarded as-is)
+ *   POST /v1/copilot-cli/hook    — raw Copilot CLI hook JSON (forwarded as-is)
  *   GET  /health                 — liveness check
  */
 
@@ -23,6 +24,11 @@ import {
   summarizeCodexPayload,
   type CodexHookPayload,
 } from "./codex.ts";
+import {
+  mapCopilotCliHook,
+  summarizeCopilotPayload,
+  type CopilotCliHookPayload,
+} from "./copilot-cli.ts";
 import type { Notifier } from "./notifier.ts";
 
 export class IngestServer {
@@ -49,6 +55,7 @@ export class IngestServer {
     console.log(`  POST /v1/claude-code/hook`);
     console.log(`  POST /v1/grok-code/hook`);
     console.log(`  POST /v1/codex/hook`);
+    console.log(`  POST /v1/copilot-cli/hook`);
     console.log(`  GET  /health`);
   }
 
@@ -87,6 +94,10 @@ export class IngestServer {
 
     if (path === "/v1/codex/hook") {
       return this.handleCodexHook(request);
+    }
+
+    if (path === "/v1/copilot-cli/hook") {
+      return this.handleCopilotCliHook(request);
     }
 
     return json({ error: "Not found" }, 404);
@@ -205,6 +216,32 @@ export class IngestServer {
     await this.notifier.send(notification);
     return json({ ok: true });
   }
+
+  private async handleCopilotCliHook(request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "Invalid JSON body" }, 400);
+    }
+
+    const payload = body as CopilotCliHookPayload;
+    const summary = summarizeCopilotPayload(payload);
+    console.log(`Ingest /v1/copilot-cli/hook: raw ${summary}`);
+
+    const notification = mapCopilotCliHook(payload);
+
+    if (!notification) {
+      console.log(`Ingest /v1/copilot-cli/hook: ignored ${summary}`);
+      return json({ ok: true, ignored: true });
+    }
+
+    console.log(
+      `Ingest /v1/copilot-cli/hook: type=${notification.type} session=${notification.sessionId} ${summary}`
+    );
+    await this.notifier.send(notification);
+    return json({ ok: true });
+  }
 }
 
 function json(data: unknown, status = 200): Response {
@@ -244,7 +281,8 @@ function parseNotifyBody(body: unknown): Notification {
     obj.source === "claude-code" ||
     obj.source === "opencode" ||
     obj.source === "grok-code" ||
-    obj.source === "codex"
+    obj.source === "codex" ||
+    obj.source === "copilot-cli"
   ) {
     source = obj.source;
   }
