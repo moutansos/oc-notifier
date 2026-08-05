@@ -49,7 +49,7 @@ export interface Config {
    */
   opencode?: OpenCodeConfig;
   /**
-   * HTTP ingest server for external clients (Claude Code plugin).
+   * HTTP ingest server for external clients (Claude / Grok / Codex plugins).
    * Optional when opencode is configured.
    */
   ingest?: IngestConfig;

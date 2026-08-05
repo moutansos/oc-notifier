@@ -2,8 +2,9 @@
  * oc-notifier - CLI entry point
  *
  * Connects to an OpenCode server's SSE stream and/or listens for HTTP ingest
- * events (Claude Code / Grok hooks) and sends push notifications when sessions
- * become idle, when a question is asked, or when a permission request is pending.
+ * events (Claude Code / Grok / Codex hooks) and sends push notifications when
+ * sessions become idle, when a question is asked, or when a permission request
+ * is pending.
  */
 
 import { parseArgs } from "util";
@@ -14,6 +15,7 @@ import { Notifier } from "./notifier.ts";
 import { IngestServer } from "./ingest-server.ts";
 import { installClaudePlugin } from "./install-claude-plugin.ts";
 import { installGrokPlugin } from "./install-grok-plugin.ts";
+import { installCodexPlugin } from "./install-codex-plugin.ts";
 
 import type { PermissionEvent, QuestionEvent } from "./sse-client.ts";
 import type { NotificationChoice } from "./providers/types.ts";
@@ -39,6 +41,10 @@ const { values } = parseArgs({
       type: "boolean",
       default: false,
     },
+    "install-codex-plugin": {
+      type: "boolean",
+      default: false,
+    },
     "plugin-source": {
       type: "string",
     },
@@ -50,7 +56,7 @@ const { values } = parseArgs({
 
 if (values.help) {
   console.log(`
-oc-notifier - OpenCode / Claude Code / Grok session idle notifier
+oc-notifier - OpenCode / Claude Code / Grok / Codex session idle notifier
 
 Usage:
   bun run src/index.ts [options]
@@ -61,6 +67,8 @@ Options:
                                 Linux/macOS: symlink  |  Windows: copy
   --install-grok-plugin         Install/upgrade the Grok plugin into ~/.grok/plugins/
                                 Linux/macOS: symlink  |  Windows: copy
+  --install-codex-plugin        Install/upgrade Codex hooks into ~/.codex/hooks/
+                                (also merges Stop + PermissionRequest into hooks.json)
   --plugin-source <path>        Override plugin source directory
   --plugin-target <path>        Override install target directory
   -h, --help                    Show this help message
@@ -69,6 +77,7 @@ Examples:
   bun run src/index.ts --config /path/to/config.json
   bun run src/index.ts --install-claude-plugin
   bun run src/index.ts --install-grok-plugin
+  bun run src/index.ts --install-codex-plugin
 `);
   process.exit(0);
 }
@@ -99,6 +108,21 @@ async function main() {
     console.log("  1. Ensure oc-notifier is running with ingest.enabled: true (port 4100)");
     console.log("  2. Restart Grok or run /plugins reload");
     console.log("  3. Optional: export OC_NOTIFIER_URL / OC_NOTIFIER_TOKEN");
+    process.exit(0);
+  }
+
+  if (values["install-codex-plugin"]) {
+    const summary = await installCodexPlugin({
+      sourceDir: values["plugin-source"],
+      targetDir: values["plugin-target"],
+    });
+    console.log(summary);
+    console.log("");
+    console.log("Next steps:");
+    console.log("  1. Ensure oc-notifier is running with ingest.enabled: true (port 4100)");
+    console.log("  2. In Codex, run /hooks and trust the oc-notifier Stop + PermissionRequest hooks");
+    console.log("     (re-install may require re-trusting hooks; definition hashes can change)");
+    console.log("  3. Requires bash + curl on PATH; optional: OC_NOTIFIER_URL / OC_NOTIFIER_TOKEN");
     process.exit(0);
   }
 

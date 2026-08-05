@@ -110,9 +110,10 @@ export class MSTeamsProvider implements NotificationProvider {
       content.actions = [
         {
           type: "Action.OpenUrl",
-          title: notification.source === "claude-code"
-            ? "Open session"
-            : "Open in OpenCode Desktop",
+          title:
+            notification.source === "opencode" || !notification.source
+              ? "Open in OpenCode Desktop"
+              : "Open session",
           url: notification.desktopUrl,
         },
       ];

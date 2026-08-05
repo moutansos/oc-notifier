@@ -1,5 +1,5 @@
 /**
- * Shared install helper for harness plugins (Claude Code / Grok).
+ * Shared install helper for harness plugins (Claude Code / Grok / Codex).
  *
  * - Linux / macOS: symlink (stays in sync with the repo)
  * - Windows: recursive copy

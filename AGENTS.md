@@ -25,6 +25,9 @@ bun run install-claude-plugin
 # Install/upgrade Grok plugin (~/.grok/plugins/oc-notifier)
 bun run install-grok-plugin
 
+# Install/upgrade Codex hooks (~/.codex/hooks/oc-notifier + hooks.json merge)
+bun run install-codex-plugin
+
 # Development mode (auto-reload on changes)
 bun run dev
 
@@ -66,12 +69,14 @@ src/
 ├── config.ts             # Configuration loading & validation
 ├── notifier.ts           # Notification dispatcher
 ├── sse-client.ts         # SSE connection to OpenCode server
-├── ingest-server.ts      # HTTP ingest API for Claude / Grok / external clients
+├── ingest-server.ts      # HTTP ingest API for Claude / Grok / Codex / external clients
 ├── claude-code.ts        # Map Claude Code hook payloads → Notification
 ├── grok-code.ts          # Map Grok hook payloads → Notification
+├── codex.ts              # Map Codex CLI hook payloads → Notification
 ├── install-plugin.ts         # Shared symlink/copy install helper
 ├── install-claude-plugin.ts  # --install-claude-plugin
 ├── install-grok-plugin.ts    # --install-grok-plugin
+├── install-codex-plugin.ts   # --install-codex-plugin
 └── providers/
     ├── index.ts          # Provider factory/registry
     ├── types.ts          # Provider interfaces & types
@@ -86,6 +91,11 @@ claude-code-plugin/       # Claude Code plugin (hooks only; oc-notifier owns del
 
 grok-code-plugin/         # Grok Build plugin (hooks only)
 ├── plugin.json
+├── hooks/hooks.json
+└── scripts/forward.sh
+
+codex-plugin/             # Codex CLI hooks (Stop + PermissionRequest)
+├── .codex-plugin/plugin.json
 ├── hooks/hooks.json
 └── scripts/forward.sh
 ```

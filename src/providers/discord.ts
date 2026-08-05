@@ -23,6 +23,7 @@ import { sourceLabel } from "./types.ts";
 const harnessAvatarUrl: Record<NotificationSource, string> = {
   "claude-code": "https://www.google.com/s2/favicons?domain=claude.ai&sz=128",
   "grok-code": "https://www.google.com/s2/favicons?domain=grok.com&sz=128",
+  codex: "https://www.google.com/s2/favicons?domain=openai.com&sz=128",
   opencode: "https://www.google.com/s2/favicons?domain=opencode.ai&sz=128",
 };
 
