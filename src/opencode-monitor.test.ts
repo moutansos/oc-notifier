@@ -43,8 +43,15 @@ const permissionAsked: PermissionEvent = {
   metadata: {},
 };
 
+/**
+ * The same request seen through the legacy event. A server that emits both
+ * normally reuses the permission record id, so the id alone would already
+ * collapse them — this fixture varies the id so the tool call is what has to
+ * do the correlating.
+ */
 const permissionUpdated: PermissionEvent = {
   ...permissionAsked,
+  id: "per_legacy_1",
   title: "Edit src/index.ts",
 };
 
@@ -96,7 +103,22 @@ describe("question handler (issue 11: one card per ask)", () => {
     expect(sent).toHaveLength(1);
   });
 
-  test("collapses events that overlap in flight", async () => {
+  test("claims the ask before it starts fetching session info", async () => {
+    // The reservation has to be taken before the await, not after it: anything
+    // that arrives while the fetch is in flight must already see it claimed.
+    const { deps } = harness();
+    let claimedWhenFetchStarted = 0;
+    deps.fetchSessionInfo = async () => {
+      claimedWhenFetchStarted = deps.questions.size;
+      return null;
+    };
+
+    await createQuestionHandler(deps)(questionAsked, directory);
+
+    expect(claimedWhenFetchStarted).toBeGreaterThan(0);
+  });
+
+  test("sends one notification for events that overlap in flight", async () => {
     const { deps, sent } = harness();
     // Hold both handlers inside fetchSessionInfo so neither has notified when
     // the other starts: the reservation has to be taken before that await.
@@ -174,6 +196,8 @@ describe("question handler (issue 11: one card per ask)", () => {
   test("an ask with no tool call falls back to the notifier's content dedupe", async () => {
     // Nothing correlates the two paths when question.asked omits `tool`, so both
     // reach the notifier — which collapses them by session + question text.
+    // That backstop only holds while both paths render the same text, which is
+    // true as long as the tool part carries the ask's complete input.
     const captured: Notification[] = [];
     const capture: NotificationProvider = {
       type: "capture",
@@ -204,6 +228,16 @@ describe("permission handler", () => {
 
     expect(sent).toHaveLength(1);
     expect(sent[0]?.permissionTitle).toBe("edit: src/**");
+  });
+
+  test("a replayed permission request sends nothing new", async () => {
+    const { deps, sent } = harness();
+    const handle = createPermissionHandler(deps);
+
+    await handle(permissionAsked, directory);
+    await handle(permissionAsked, directory);
+
+    expect(sent).toHaveLength(1);
   });
 
   test("a question and a permission sharing a tool call both notify", async () => {

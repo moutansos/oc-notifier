@@ -54,7 +54,7 @@ bun test
 bun test src/opencode-monitor.test.ts
 
 # Run tests matching a pattern
-bun test --filter "discord"
+bun test --filter "question"
 
 # Watch mode
 bun test --watch
