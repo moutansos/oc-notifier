@@ -17,9 +17,13 @@ import { installClaudePlugin } from "./install-claude-plugin.ts";
 import { installGrokPlugin } from "./install-grok-plugin.ts";
 import { installCodexPlugin } from "./install-codex-plugin.ts";
 import { installCopilotPlugin } from "./install-copilot-plugin.ts";
-
-import type { PermissionEvent, QuestionEvent } from "./sse-client.ts";
-import type { NotificationChoice } from "./providers/types.ts";
+import { EventDeduper } from "./event-dedupe.ts";
+import {
+  buildDesktopUrl,
+  createPermissionHandler,
+  createQuestionHandler,
+  type MonitorDeps,
+} from "./opencode-monitor.ts";
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -314,181 +318,28 @@ function setupOpenCodeMonitoring(
     }
   });
 
-  // Track question tool calls to avoid duplicate notifications
-  // Map of "sessionID:callID" -> timestamp when we notified
-  const notifiedQuestions = new Map<string, number>();
+  // One ask reaches us as both question.asked and the question tool part, so a
+  // reservation covers the request id and the tool call id.
+  const requestTtlMs = 30 * 60 * 1000; // 30 minutes
+  const monitorDeps: MonitorDeps = {
+    questions: new EventDeduper(requestTtlMs),
+    permissions: new EventDeduper(requestTtlMs),
+    knownSubagents,
+    fetchSessionInfo: (sessionID, directory) =>
+      sseClient.fetchSessionInfo(sessionID, directory),
+    send: (notification) => notifier.send(notification),
+    desktopBaseUrl: opencodeConfig.desktopBaseUrl,
+  };
 
-  // Clean up old question tracking entries periodically
-  const QUESTION_TTL_MS = 30 * 60 * 1000; // 30 minutes
   setInterval(() => {
-    const now = Date.now();
-    for (const [key, timestamp] of notifiedQuestions) {
-      if (now - timestamp > QUESTION_TTL_MS) {
-        notifiedQuestions.delete(key);
-      }
-    }
+    monitorDeps.questions.prune();
+    monitorDeps.permissions.prune();
   }, CLEANUP_INTERVAL_MS);
 
-  // Handle question events
-  sseClient.onQuestion(async (question: QuestionEvent, directory: string) => {
-    const { sessionID, id: questionID } = question;
-
-    // Skip known subagent sessions
-    if (knownSubagents.has(sessionID)) {
-      return;
-    }
-
-    if (notifiedQuestions.has(questionID)) {
-      return;
-    }
-
-    const questionText = formatQuestionText(question);
-    console.log(`Question asked in session ${sessionID}, sending notification...`);
-
-    const sessionInfo = await sseClient.fetchSessionInfo(sessionID, directory);
-
-    if (sessionInfo?.parentSessionID) {
-      console.log(`Session ${sessionID} is a subagent, skipping question notification`);
-      knownSubagents.add(sessionID);
-      return;
-    }
-
-    notifiedQuestions.set(questionID, Date.now());
-
-    const notification: Notification = {
-      type: "question",
-      source: "opencode",
-      sessionId: sessionID,
-      sessionTitle: sessionInfo?.title || sessionID,
-      projectId: sessionInfo?.projectID || "",
-      projectDirectory: directory,
-      desktopUrl: buildDesktopUrl(opencodeConfig.desktopBaseUrl, directory, sessionID),
-      timestamp: new Date(),
-      question: questionText,
-      choices: buildQuestionChoices(question),
-    };
-
-    await notifier.send(notification);
-  });
-
-  // Track permission requests to avoid duplicate notifications
-  // Map of "permissionID" -> timestamp when we notified
-  const notifiedPermissions = new Map<string, number>();
-
-  // Clean up old permission tracking entries periodically
-  const PERMISSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
-  setInterval(() => {
-    const now = Date.now();
-    for (const [key, timestamp] of notifiedPermissions) {
-      if (now - timestamp > PERMISSION_TTL_MS) {
-        notifiedPermissions.delete(key);
-      }
-    }
-  }, CLEANUP_INTERVAL_MS);
-
-  // Handle permission request events
-  sseClient.onPermission(async (permission: PermissionEvent, directory: string) => {
-    const { sessionID, id: permissionID } = permission;
-
-    // Skip known subagent sessions
-    if (knownSubagents.has(sessionID)) {
-      return;
-    }
-
-    // Deduplicate by permission ID
-    if (notifiedPermissions.has(permissionID)) {
-      return;
-    }
-
-    console.log(`Permission request "${permission.title}" in session ${sessionID}, sending notification...`);
-
-    const sessionInfo = await sseClient.fetchSessionInfo(sessionID, directory);
-
-    if (sessionInfo?.parentSessionID) {
-      console.log(`Session ${sessionID} is a subagent, skipping permission notification`);
-      knownSubagents.add(sessionID);
-      return;
-    }
-
-    notifiedPermissions.set(permissionID, Date.now());
-
-    const notification: Notification = {
-      type: "permission",
-      source: "opencode",
-      sessionId: sessionID,
-      sessionTitle: sessionInfo?.title || sessionID,
-      projectId: sessionInfo?.projectID || "",
-      projectDirectory: directory,
-      desktopUrl: buildDesktopUrl(opencodeConfig.desktopBaseUrl, directory, sessionID),
-      timestamp: new Date(),
-      permissionTitle: permission.title,
-      permissionType: permission.permissionType,
-      choices: buildPermissionChoices(permission),
-    };
-
-    await notifier.send(notification);
-  });
+  sseClient.onQuestion(createQuestionHandler(monitorDeps));
+  sseClient.onPermission(createPermissionHandler(monitorDeps));
 
   return sseClient;
-}
-
-function formatQuestionText(question: QuestionEvent): string {
-  return question.questions
-    .map((item) => item.header ? `${item.header}: ${item.question}` : item.question)
-    .join("\n\n");
-}
-
-function buildQuestionChoices(question: QuestionEvent): NotificationChoice[] {
-  const choices: NotificationChoice[] = [];
-
-  for (const item of question.questions) {
-    for (const option of item.options) {
-      choices.push({
-        label: option.label,
-        description: option.description,
-      });
-    }
-
-    if (item.custom !== false) {
-      choices.push({
-        label: "Custom answer",
-        description: "Type your own response in OpenCode",
-      });
-    }
-  }
-
-  return choices;
-}
-
-function buildPermissionChoices(permission: PermissionEvent): NotificationChoice[] {
-  const alwaysDescription = permission.alwaysPatterns.length > 0
-    ? `Approve future requests matching: ${permission.alwaysPatterns.join(", ")}`
-    : "Approve future matching requests for this session";
-
-  return [
-    { label: "Once", description: "Approve just this request" },
-    { label: "Always", description: alwaysDescription },
-    { label: "Reject", description: "Deny the request" },
-  ];
-}
-
-/** Matches OpenCode's base64url encoding from @opencode-ai/core/util/encode */
-function base64Encode(value: string): string {
-  return Buffer.from(value, "utf-8")
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=/g, "");
-}
-
-/**
- * Build a deep link to a session in the OpenCode web/desktop UI.
- * Uses the directory-keyed route: /{base64(directory)}/session/{sessionId}
- * @see https://github.com/anomalyco/opencode/blob/dev/packages/app/src/utils/session-route.ts
- */
-function buildDesktopUrl(baseUrl: string, directory: string, sessionId: string): string {
-  const encodedDirectory = base64Encode(directory);
-  return `${baseUrl.replace(/\/$/, "")}/${encodedDirectory}/session/${sessionId}`;
 }
 
 main().catch((error) => {

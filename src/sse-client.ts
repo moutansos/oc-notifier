@@ -96,6 +96,8 @@ export interface PermissionEvent {
   patterns: string[];
   alwaysPatterns: string[];
   metadata: Record<string, unknown>;
+  /** Tool call this request belongs to; correlates v2 and legacy events */
+  callID?: string;
 }
 
 // Question event types (v2)
@@ -132,6 +134,8 @@ export interface QuestionEvent {
   id: string;
   sessionID: string;
   questions: QuestionInfo[];
+  /** Tool call this question belongs to; correlates v2 and legacy events */
+  callID?: string;
 }
 
 export interface SessionInfo {
@@ -155,6 +159,10 @@ export class SSEClient {
   private eventHandlers: EventHandler[] = [];
   private questionHandlers: QuestionHandler[] = [];
   private permissionHandlers: PermissionHandler[] = [];
+  // A server that speaks the v2 events also emits a tool part / legacy event for
+  // the same request. Once we have proof of v2, the older path is pure duplicate.
+  private sawQuestionAsked = false;
+  private sawPermissionAsked = false;
 
   constructor(config: OpenCodeConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
@@ -294,12 +302,13 @@ export class SSEClient {
       this.currentEventData += line.slice(5).trim();
     } else if (line === "" && this.currentEventData) {
       // Empty line means end of event
-      this.processEvent(this.currentEventData);
+      this.handleEventData(this.currentEventData);
       this.currentEventData = "";
     }
   }
 
-  private processEvent(data: string): void {
+  /** Route one SSE `data:` payload to handlers. Public for tests. */
+  handleEventData(data: string): void {
     try {
       // Global events are wrapped in { directory, payload } format
       const globalEvent = JSON.parse(data) as GlobalEvent;
@@ -315,6 +324,7 @@ export class SSEClient {
         }
       } else if (payload.type === "question.asked") {
         const questionEvent = payload as QuestionAskedEvent;
+        this.sawQuestionAsked = true;
         const normalized = normalizeQuestionRequest(questionEvent.properties);
         for (const handler of this.questionHandlers) {
           handler(normalized, directory);
@@ -323,10 +333,23 @@ export class SSEClient {
         const partEvent = payload as MessagePartUpdatedEvent;
         const part = partEvent.properties.part;
 
-        // Legacy fallback: question tool via message.part.updated
-        if (part.type === "tool" && (part as ToolPart).tool === "question") {
+        // Legacy fallback: question tool via message.part.updated. Servers that
+        // emit question.asked also emit this part for the same ask, so the
+        // fallback is only for servers that never send the v2 event.
+        //
+        // The part usually lands *before* question.asked (the tool goes running,
+        // then execute() publishes), so the latch rarely suppresses the twin —
+        // the call-id correlation in opencode-monitor.ts does that. What the
+        // latch does catch is a part with no ask behind it: when the question
+        // permission is denied (subagents deny it by default) the tool still
+        // goes running but nothing is ever asked.
+        if (
+          !this.sawQuestionAsked &&
+          part.type === "tool" &&
+          (part as ToolPart).tool === "question"
+        ) {
           const toolPart = part as ToolPart;
-          const normalized = normalizeQuestionFromTool(toolPart.sessionID, toolPart.state);
+          const normalized = normalizeQuestionFromTool(toolPart);
           if (normalized) {
             for (const handler of this.questionHandlers) {
               handler(normalized, directory);
@@ -335,11 +358,16 @@ export class SSEClient {
         }
       } else if (payload.type === "permission.asked") {
         const permEvent = payload as PermissionAskedEvent;
+        this.sawPermissionAsked = true;
         const normalized = normalizePermissionRequest(permEvent.properties);
         for (const handler of this.permissionHandlers) {
           handler(normalized, directory);
         }
       } else if (payload.type === "permission.updated") {
+        // Legacy twin of permission.asked; skip once the server proved it is v2.
+        if (this.sawPermissionAsked) {
+          return;
+        }
         const permEvent = payload as PermissionUpdatedEvent;
         const normalized = normalizeLegacyPermission(permEvent.properties);
         for (const handler of this.permissionHandlers) {
@@ -370,6 +398,7 @@ function normalizePermissionRequest(request: PermissionRequest): PermissionEvent
     patterns,
     alwaysPatterns: request.always,
     metadata: request.metadata,
+    callID: request.tool?.callID,
   };
 }
 
@@ -388,6 +417,7 @@ function normalizeLegacyPermission(permission: PermissionLegacy): PermissionEven
     patterns,
     alwaysPatterns: patterns,
     metadata: permission.metadata,
+    callID: permission.callID,
   };
 }
 
@@ -396,10 +426,12 @@ function normalizeQuestionRequest(request: QuestionRequest): QuestionEvent {
     id: request.id,
     sessionID: request.sessionID,
     questions: request.questions,
+    callID: request.tool?.callID,
   };
 }
 
-function normalizeQuestionFromTool(sessionID: string, toolState: ToolState): QuestionEvent | null {
+function normalizeQuestionFromTool(part: ToolPart): QuestionEvent | null {
+  const toolState = part.state;
   if (toolState.status !== "running") {
     return null;
   }
@@ -431,8 +463,11 @@ function normalizeQuestionFromTool(sessionID: string, toolState: ToolState): Que
   const firstQuestion = questions[0]?.question ?? "OpenCode is waiting for your input";
 
   return {
-    id: `${sessionID}:${firstQuestion.slice(0, 100)}`,
-    sessionID,
+    id: part.callID
+      ? `${part.sessionID}:${part.callID}`
+      : `${part.sessionID}:${firstQuestion.slice(0, 100)}`,
+    sessionID: part.sessionID,
     questions,
+    callID: part.callID,
   };
 }
