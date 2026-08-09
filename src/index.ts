@@ -17,6 +17,7 @@ import { installClaudePlugin } from "./install-claude-plugin.ts";
 import { installGrokPlugin } from "./install-grok-plugin.ts";
 import { installCodexPlugin } from "./install-codex-plugin.ts";
 import { installCopilotPlugin } from "./install-copilot-plugin.ts";
+import { EventDeduper, permissionKeys, questionKeys } from "./event-dedupe.ts";
 
 import type { PermissionEvent, QuestionEvent } from "./sse-client.ts";
 import type { NotificationChoice } from "./providers/types.ts";
@@ -314,31 +315,26 @@ function setupOpenCodeMonitoring(
     }
   });
 
-  // Track question tool calls to avoid duplicate notifications
-  // Map of "sessionID:callID" -> timestamp when we notified
-  const notifiedQuestions = new Map<string, number>();
+  // Track question requests to avoid duplicate notifications. One ask can reach
+  // us as both question.asked and the question tool part, so the reservation
+  // covers the request id and the tool call id.
+  const REQUEST_TTL_MS = 30 * 60 * 1000; // 30 minutes
+  const notifiedQuestions = new EventDeduper(REQUEST_TTL_MS);
 
-  // Clean up old question tracking entries periodically
-  const QUESTION_TTL_MS = 30 * 60 * 1000; // 30 minutes
-  setInterval(() => {
-    const now = Date.now();
-    for (const [key, timestamp] of notifiedQuestions) {
-      if (now - timestamp > QUESTION_TTL_MS) {
-        notifiedQuestions.delete(key);
-      }
-    }
-  }, CLEANUP_INTERVAL_MS);
+  setInterval(() => notifiedQuestions.prune(), CLEANUP_INTERVAL_MS);
 
   // Handle question events
   sseClient.onQuestion(async (question: QuestionEvent, directory: string) => {
-    const { sessionID, id: questionID } = question;
+    const { sessionID } = question;
 
     // Skip known subagent sessions
     if (knownSubagents.has(sessionID)) {
       return;
     }
 
-    if (notifiedQuestions.has(questionID)) {
+    // Reserve before awaiting session info: two events for the same ask arrive
+    // milliseconds apart and would both pass a check made after the await.
+    if (!notifiedQuestions.reserve(questionKeys(question))) {
       return;
     }
 
@@ -352,8 +348,6 @@ function setupOpenCodeMonitoring(
       knownSubagents.add(sessionID);
       return;
     }
-
-    notifiedQuestions.set(questionID, Date.now());
 
     const notification: Notification = {
       type: "question",
@@ -371,32 +365,23 @@ function setupOpenCodeMonitoring(
     await notifier.send(notification);
   });
 
-  // Track permission requests to avoid duplicate notifications
-  // Map of "permissionID" -> timestamp when we notified
-  const notifiedPermissions = new Map<string, number>();
+  // Track permission requests to avoid duplicate notifications (same reasoning
+  // as questions: v2 and legacy events can describe the same request).
+  const notifiedPermissions = new EventDeduper(REQUEST_TTL_MS);
 
-  // Clean up old permission tracking entries periodically
-  const PERMISSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
-  setInterval(() => {
-    const now = Date.now();
-    for (const [key, timestamp] of notifiedPermissions) {
-      if (now - timestamp > PERMISSION_TTL_MS) {
-        notifiedPermissions.delete(key);
-      }
-    }
-  }, CLEANUP_INTERVAL_MS);
+  setInterval(() => notifiedPermissions.prune(), CLEANUP_INTERVAL_MS);
 
   // Handle permission request events
   sseClient.onPermission(async (permission: PermissionEvent, directory: string) => {
-    const { sessionID, id: permissionID } = permission;
+    const { sessionID } = permission;
 
     // Skip known subagent sessions
     if (knownSubagents.has(sessionID)) {
       return;
     }
 
-    // Deduplicate by permission ID
-    if (notifiedPermissions.has(permissionID)) {
+    // Reserve before awaiting session info (see the question handler).
+    if (!notifiedPermissions.reserve(permissionKeys(permission))) {
       return;
     }
 
@@ -409,8 +394,6 @@ function setupOpenCodeMonitoring(
       knownSubagents.add(sessionID);
       return;
     }
-
-    notifiedPermissions.set(permissionID, Date.now());
 
     const notification: Notification = {
       type: "permission",

@@ -388,6 +388,11 @@ docker run -v /path/to/config.json:/config/config.json oc-notifier
    - Dispatches notifications to all enabled providers
 3. Question and permission events are forwarded similarly
 
+> **One card per prompt:** OpenCode describes a single ask twice — the
+> `question.asked` / `permission.asked` event and the underlying tool part (older
+> servers only emit one of the two). oc-notifier correlates both by tool call ID
+> and notifies once, so a multiple-choice question sends one card, not two.
+
 **Claude Code / Grok / Codex / Copilot CLI (HTTP ingest):**
 
 1. Plugins/hooks capture lifecycle events (`Stop` / `agentStop`, `PermissionRequest`, `Notification`, …)
