@@ -27,6 +27,32 @@ describe("EventDeduper", () => {
   });
 
   test("forgets reservations older than the TTL", () => {
+    let now = 1_000;
+    const deduper = new EventDeduper(60_000, () => now);
+
+    expect(deduper.reserve(["a"])).toBe(true);
+
+    now += 59_999;
+    expect(deduper.reserve(["a"])).toBe(false);
+
+    now += 1;
+    expect(deduper.reserve(["a"])).toBe(true);
+  });
+
+  test("prunes expired reservations instead of growing forever", () => {
+    let now = 0;
+    const deduper = new EventDeduper(1_000, () => now);
+
+    for (let i = 0; i < 100; i++) {
+      deduper.reserve([`key-${i}`]);
+    }
+    expect(deduper.size).toBe(100);
+
+    now += 1_000;
+    expect(deduper.size).toBe(0);
+  });
+
+  test("a TTL of zero disables deduplication", () => {
     const deduper = new EventDeduper(0);
 
     expect(deduper.reserve(["a"])).toBe(true);

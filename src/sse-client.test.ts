@@ -79,7 +79,7 @@ function collectQuestions(events: string[]): QuestionEvent[] {
 }
 
 describe("SSEClient question routing", () => {
-  test("emits once when question.asked arrives before the question tool part", () => {
+  test("drops a tool part that follows question.asked (part with no ask behind it)", () => {
     const received = collectQuestions([questionAsked(), questionToolPart()]);
 
     expect(received).toHaveLength(1);
@@ -87,14 +87,16 @@ describe("SSEClient question routing", () => {
     expect(received[0]?.callID).toBe("call_1");
   });
 
-  test("tool part fallback carries the call id so the ask can be correlated", () => {
-    // Tool part first: the client cannot know yet that the server speaks v2, so
-    // both are emitted — the call id lets the caller collapse them.
+  test("emits both in the usual order, tagged with the call id that correlates them", () => {
+    // The tool part normally lands first, before the client can know the server
+    // speaks v2, so both reach the handlers. Collapsing them into one card is
+    // opencode-monitor.ts's job, using the shared call id.
     const received = collectQuestions([questionToolPart(), questionAsked()]);
 
     expect(received).toHaveLength(2);
     expect(received[0]?.callID).toBe("call_1");
     expect(received[1]?.callID).toBe("call_1");
+    expect(received[0]?.id).toBe("ses_abc:call_1");
   });
 
   test("keeps the tool part fallback for servers that never send question.asked", () => {
@@ -178,5 +180,26 @@ describe("SSEClient permission routing", () => {
     expect(received).toHaveLength(1);
     expect(received[0]?.title).toBe("Edit src/index.ts");
     expect(received[0]?.callID).toBe("call_9");
+  });
+
+  test("handles a legacy permission with no tool call attached", () => {
+    const withoutCallID = globalEvent({
+      type: "permission.updated",
+      properties: {
+        id: "per_2",
+        type: "bash",
+        sessionID: "ses_abc",
+        messageID: "msg_1",
+        title: "Run tests",
+        metadata: {},
+        time: { created: 0 },
+      },
+    });
+
+    const received = collectPermissions([withoutCallID]);
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.callID).toBeUndefined();
+    expect(received[0]?.patterns).toEqual([]);
   });
 });

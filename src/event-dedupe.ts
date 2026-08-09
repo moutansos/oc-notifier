@@ -10,11 +10,18 @@
 
 export class EventDeduper {
   private readonly ttlMs: number;
+  private readonly now: () => number;
   /** key -> reservation timestamp (ms) */
   private readonly seen = new Map<string, number>();
 
-  constructor(ttlMs: number) {
+  /**
+   * @param ttlMs how long a reservation is remembered; `0` or less disables
+   *   deduplication entirely (every reserve succeeds)
+   * @param now clock source, injectable for tests
+   */
+  constructor(ttlMs: number, now: () => number = Date.now) {
     this.ttlMs = ttlMs;
+    this.now = now;
   }
 
   /**
@@ -22,7 +29,11 @@ export class EventDeduper {
    * the TTL; otherwise records every key and returns true.
    */
   reserve(keys: string[]): boolean {
-    const now = Date.now();
+    if (this.ttlMs <= 0) {
+      return true;
+    }
+
+    const now = this.now();
     this.prune(now);
 
     for (const key of keys) {
@@ -38,13 +49,14 @@ export class EventDeduper {
     return true;
   }
 
-  /** Number of live reservations (exported for tests). */
+  /** Number of live reservations (exposed for tests). */
   get size(): number {
-    this.prune(Date.now());
+    this.prune();
     return this.seen.size;
   }
 
-  prune(now: number = Date.now()): void {
+  /** Drop reservations that have outlived the TTL. */
+  prune(now: number = this.now()): void {
     for (const [key, timestamp] of this.seen) {
       if (now - timestamp >= this.ttlMs) {
         this.seen.delete(key);

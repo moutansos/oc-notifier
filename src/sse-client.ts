@@ -336,6 +336,13 @@ export class SSEClient {
         // Legacy fallback: question tool via message.part.updated. Servers that
         // emit question.asked also emit this part for the same ask, so the
         // fallback is only for servers that never send the v2 event.
+        //
+        // The part usually lands *before* question.asked (the tool goes running,
+        // then execute() publishes), so the latch rarely suppresses the twin —
+        // the call-id correlation in opencode-monitor.ts does that. What the
+        // latch does catch is a part with no ask behind it: when the question
+        // permission is denied (subagents deny it by default) the tool still
+        // goes running but nothing is ever asked.
         if (
           !this.sawQuestionAsked &&
           part.type === "tool" &&

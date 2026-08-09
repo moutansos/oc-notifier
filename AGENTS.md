@@ -43,14 +43,15 @@ bun run src/index.ts
 
 ## Testing
 
-No test framework is currently configured. If tests are added, use Bun's built-in test runner:
+Tests use Bun's built-in test runner and live next to the code they cover
+(`src/*.test.ts`):
 
 ```bash
 # Run all tests
 bun test
 
 # Run a single test file
-bun test src/providers/discord.test.ts
+bun test src/opencode-monitor.test.ts
 
 # Run tests matching a pattern
 bun test --filter "discord"
@@ -72,6 +73,8 @@ src/
 ├── config.ts             # Configuration loading & validation
 ├── notifier.ts           # Notification dispatcher
 ├── sse-client.ts         # SSE connection to OpenCode server
+├── opencode-monitor.ts   # OpenCode question/permission handlers → Notification
+├── event-dedupe.ts       # One-notification-per-request reservations
 ├── ingest-server.ts      # HTTP ingest API for Claude / Grok / Codex / Copilot / external clients
 ├── claude-code.ts        # Map Claude Code hook payloads → Notification
 ├── grok-code.ts          # Map Grok hook payloads → Notification
