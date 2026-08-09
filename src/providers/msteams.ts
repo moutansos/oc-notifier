@@ -5,7 +5,7 @@
 
 import type { MSTeamsProviderConfig } from "../config.ts";
 import type { Notification, NotificationProvider } from "./types.ts";
-import { sourceLabel } from "./types.ts";
+import { displayHostname, sourceLabel } from "./types.ts";
 
 export class MSTeamsProvider implements NotificationProvider {
   readonly type = "msteams";
@@ -24,6 +24,7 @@ export class MSTeamsProvider implements NotificationProvider {
       notification.projectDirectory ||
       "project";
     const source = sourceLabel(notification.source);
+    const machine = displayHostname(notification.hostname);
     const hasLink = Boolean(notification.desktopUrl);
 
     const isQuestion = notification.type === "question";
@@ -52,6 +53,10 @@ export class MSTeamsProvider implements NotificationProvider {
           {
             title: "Source",
             value: source,
+          },
+          {
+            title: "Host",
+            value: machine,
           },
           {
             title: "Project",

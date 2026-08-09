@@ -7,6 +7,7 @@ import type { NotificationProvider } from "./types.ts";
 import { DiscordProvider } from "./discord.ts";
 import { WebhookProvider } from "./webhook.ts";
 import { MSTeamsProvider } from "./msteams.ts";
+import { ParentProvider } from "./parent.ts";
 
 export type { NotificationProvider, Notification } from "./types.ts";
 
@@ -18,6 +19,8 @@ export function createProvider(config: ProviderConfig): NotificationProvider {
       return new WebhookProvider(config);
     case "msteams":
       return new MSTeamsProvider(config);
+    case "parent":
+      return new ParentProvider(config);
     default:
       // TypeScript exhaustiveness check
       const _exhaustive: never = config;

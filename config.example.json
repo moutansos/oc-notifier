@@ -32,6 +32,12 @@
       "headers": {
         "Authorization": "Bearer secret"
       }
+    },
+    {
+      "type": "parent",
+      "enabled": false,
+      "url": "http://central-notifier.example.com:4100",
+      "token": "optional-shared-secret"
     }
   ]
 }

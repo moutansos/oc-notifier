@@ -6,7 +6,6 @@
  * - avatar_url: harness icon (Claude vs OpenCode)
  */
 
-import { hostname } from "node:os";
 import type { DiscordProviderConfig } from "../config.ts";
 import type {
   Notification,
@@ -14,7 +13,7 @@ import type {
   NotificationProvider,
   NotificationSource,
 } from "./types.ts";
-import { sourceLabel } from "./types.ts";
+import { displayHostname, sourceLabel } from "./types.ts";
 
 /**
  * Public HTTPS icons Discord can fetch (no CORS required — server-side).
@@ -41,12 +40,6 @@ function formatChoices(choices: NotificationChoice[]): string {
     .join("\n");
 }
 
-function machineName(): string {
-  const raw = hostname();
-  // Short hostname (strip domain): "host.local" → "host"
-  return raw.split(".")[0] || raw || "unknown";
-}
-
 export class DiscordProvider implements NotificationProvider {
   readonly type = "discord";
   readonly enabled: boolean;
@@ -65,7 +58,8 @@ export class DiscordProvider implements NotificationProvider {
       "project";
     const source = notification.source ?? "opencode";
     const harness = sourceLabel(source);
-    const machine = machineName();
+    // Prefer stamped/forwarded hostname so parent delivery shows the child host
+    const machine = displayHostname(notification.hostname);
     // Discord author line + embed title: harness and machine
     const identity = `${harness} · ${machine}`;
     const hasLink = Boolean(notification.desktopUrl);

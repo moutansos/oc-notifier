@@ -2,6 +2,8 @@
  * Provider interface and notification types
  */
 
+import { hostname as osHostname } from "node:os";
+
 export type NotificationType = "idle" | "question" | "permission";
 
 /** Origin of the notification event */
@@ -28,6 +30,16 @@ export interface Notification {
   /** Deep link or related URL; may be empty when no UI link is available */
   desktopUrl: string;
   timestamp: Date;
+  /**
+   * Origin machine hostname (short form preferred). Preserved across parent
+   * forwarding so centralized providers still show the child instance host.
+   */
+  hostname?: string;
+  /**
+   * Number of parent-provider hops already taken. Incremented on each forward;
+   * used to reject cycles / runaway nesting.
+   */
+  hops?: number;
   /** Question text when type is "question" */
   question?: string;
   /** Permission title when type is "permission" (e.g. "Edit src/index.ts") */
@@ -58,4 +70,18 @@ export function sourceLabel(source: NotificationSource | undefined): string {
     default:
       return "OpenCode";
   }
+}
+
+/**
+ * Short hostname for display (strip domain): "host.local" → "host".
+ * Prefer an already-set notification hostname so parent instances keep the child host.
+ */
+export function displayHostname(hostname?: string): string {
+  const raw = (hostname && hostname.trim()) || osHostname() || "unknown";
+  return raw.split(".")[0] || raw || "unknown";
+}
+
+/** Local short hostname for stamping new notifications. */
+export function localHostname(): string {
+  return displayHostname();
 }

@@ -87,7 +87,8 @@ src/
     ├── types.ts          # Provider interfaces & types
     ├── discord.ts        # Discord webhook provider
     ├── msteams.ts        # Microsoft Teams provider
-    └── webhook.ts        # Generic webhook provider
+    ├── webhook.ts        # Generic webhook provider
+    └── parent.ts         # Forward to parent oc-notifier (sub-instances)
 
 claude-code-plugin/       # Claude Code plugin (hooks only; oc-notifier owns delivery)
 ├── .claude-plugin/plugin.json
@@ -188,6 +189,13 @@ Use JSDoc-style comments at top of files: `/** SSE Client for OpenCode server */
 3. Add config type to `src/config.ts` and update `ProviderConfig` union
 4. Add validation function in `src/config.ts`
 5. Register in `src/providers/index.ts`
+
+## Parent / sub-instances
+
+A child oc-notifier can use provider type `parent` to POST normalized
+notifications to another instance's `POST /v1/notify`. Always preserve
+`hostname`, `projectDirectory`, and `desktopUrl` from the origin — do not
+rewrite them to the parent's values.
 
 ## Bun-Specific APIs
 

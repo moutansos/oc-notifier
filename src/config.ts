@@ -40,7 +40,30 @@ export interface MSTeamsProviderConfig {
   webhookUrl: string;
 }
 
-export type ProviderConfig = DiscordProviderConfig | WebhookProviderConfig | MSTeamsProviderConfig;
+/**
+ * Forward notifications to a parent oc-notifier instance (ingest /v1/notify).
+ * Child hostnames, project paths, and desktop URLs are preserved in the payload.
+ */
+export interface ParentProviderConfig {
+  type: "parent";
+  enabled: boolean;
+  /**
+   * Parent ingest base URL (e.g. http://central:4100) or full /v1/notify URL.
+   */
+  url: string;
+  /** Optional bearer token matching the parent's ingest.token */
+  token?: string;
+  /** Max parent hops before drop (default: 8). Guards against cycles. */
+  maxHops?: number;
+  /** HTTP timeout for parent notify in ms (default: 10000). */
+  timeoutMs?: number;
+}
+
+export type ProviderConfig =
+  | DiscordProviderConfig
+  | WebhookProviderConfig
+  | MSTeamsProviderConfig
+  | ParentProviderConfig;
 
 export interface Config {
   /**
@@ -184,6 +207,43 @@ function validateMSTeamsProvider(config: Record<string, unknown>): MSTeamsProvid
   };
 }
 
+function validateParentProvider(config: Record<string, unknown>): ParentProviderConfig {
+  if (typeof config.url !== "string" || !config.url.trim()) {
+    throw new Error("Parent provider requires url");
+  }
+
+  if (config.token !== undefined) {
+    if (typeof config.token !== "string" || !config.token) {
+      throw new Error("Parent provider token must be a non-empty string if provided");
+    }
+  }
+
+  let maxHops: number | undefined;
+  if (config.maxHops !== undefined) {
+    if (typeof config.maxHops !== "number" || !Number.isInteger(config.maxHops) || config.maxHops < 1) {
+      throw new Error("Parent provider maxHops must be a positive integer");
+    }
+    maxHops = config.maxHops;
+  }
+
+  let timeoutMs: number | undefined;
+  if (config.timeoutMs !== undefined) {
+    if (typeof config.timeoutMs !== "number" || !Number.isInteger(config.timeoutMs) || config.timeoutMs < 1) {
+      throw new Error("Parent provider timeoutMs must be a positive integer");
+    }
+    timeoutMs = config.timeoutMs;
+  }
+
+  return {
+    type: "parent",
+    enabled: config.enabled === true,
+    url: config.url.trim(),
+    token: config.token as string | undefined,
+    maxHops,
+    timeoutMs,
+  };
+}
+
 function validateProviderConfig(config: unknown, index: number): ProviderConfig {
   if (typeof config !== "object" || config === null) {
     throw new Error(`Provider at index ${index} must be an object`);
@@ -202,6 +262,8 @@ function validateProviderConfig(config: unknown, index: number): ProviderConfig 
       return validateWebhookProvider(obj);
     case "msteams":
       return validateMSTeamsProvider(obj);
+    case "parent":
+      return validateParentProvider(obj);
     default:
       throw new Error(`Unknown provider type: ${obj.type}`);
   }

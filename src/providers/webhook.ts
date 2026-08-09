@@ -41,6 +41,10 @@ export class WebhookProvider implements NotificationProvider {
       timestamp: notification.timestamp.toISOString(),
     };
 
+    if (notification.hostname) {
+      body.hostname = notification.hostname;
+    }
+
     // Add question text if present
     if (notification.question) {
       body.question = notification.question;
@@ -52,6 +56,9 @@ export class WebhookProvider implements NotificationProvider {
     }
     if (notification.permissionType) {
       body.permissionType = notification.permissionType;
+    }
+    if (notification.choices && notification.choices.length > 0) {
+      body.choices = notification.choices;
     }
 
     const headers: Record<string, string> = {

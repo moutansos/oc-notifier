@@ -3,15 +3,27 @@
  */
 
 import type { NotificationProvider, Notification } from "./providers/index.ts";
+import { localHostname } from "./providers/types.ts";
 import { normalizeDirectory } from "./config.ts";
+
+/** Drop duplicate notifications for the same session/event within this window. */
+export const defaultDedupeWindowMs = 15_000;
 
 export class Notifier {
   private readonly providers: NotificationProvider[];
   private readonly ignoreDirectories: string[];
+  private readonly dedupeWindowMs: number;
+  /** key -> last send timestamp (ms) */
+  private readonly recentSends = new Map<string, number>();
 
-  constructor(providers: NotificationProvider[], ignoreDirectories: string[] = []) {
+  constructor(
+    providers: NotificationProvider[],
+    ignoreDirectories: string[] = [],
+    dedupeWindowMs: number = defaultDedupeWindowMs
+  ) {
     this.providers = providers.filter((p) => p.enabled);
     this.ignoreDirectories = ignoreDirectories.map(normalizeDirectory);
+    this.dedupeWindowMs = dedupeWindowMs;
 
     if (this.providers.length === 0) {
       console.warn("No enabled notification providers configured");
@@ -31,6 +43,22 @@ export class Notifier {
     if (ignoredBy) {
       console.log(
         `Notification suppressed: session ${notification.sessionId} is under ignored directory ${ignoredBy}`
+      );
+      return;
+    }
+
+    // Stamp origin host once so parent forwarding keeps the child hostname.
+    // Ingested payloads from a child already include hostname — do not overwrite.
+    if (!notification.hostname) {
+      notification.hostname = localHostname();
+    }
+
+    // Collapse accidental double-sends (e.g. two child instances, or parallel
+    // parent-forward hops) for the same logical event.
+    if (this.isDuplicate(notification)) {
+      console.log(
+        `Notification suppressed (dedupe): type=${notification.type} session=${notification.sessionId}` +
+          (notification.hostname ? ` host=${notification.hostname}` : "")
       );
       return;
     }
@@ -69,4 +97,44 @@ export class Notifier {
 
     return null;
   }
+
+  private isDuplicate(notification: Notification): boolean {
+    if (this.dedupeWindowMs <= 0) {
+      return false;
+    }
+
+    const key = dedupeKey(notification);
+    const now = Date.now();
+    this.pruneRecent(now);
+
+    const last = this.recentSends.get(key);
+    if (last !== undefined && now - last < this.dedupeWindowMs) {
+      return true;
+    }
+
+    this.recentSends.set(key, now);
+    return false;
+  }
+
+  private pruneRecent(now: number): void {
+    for (const [key, ts] of this.recentSends) {
+      if (now - ts >= this.dedupeWindowMs) {
+        this.recentSends.delete(key);
+      }
+    }
+  }
+}
+
+/** Stable key for near-duplicate detection across local SSE and parent ingest. */
+export function dedupeKey(notification: Notification): string {
+  const source = notification.source ?? "opencode";
+  const host = notification.hostname ?? "";
+  const base = `${notification.type}:${source}:${notification.sessionId}:${host}`;
+  if (notification.type === "permission") {
+    return `${base}:${notification.permissionType ?? ""}:${notification.permissionTitle ?? ""}`;
+  }
+  if (notification.type === "question") {
+    return `${base}:${notification.question ?? ""}`;
+  }
+  return base;
 }

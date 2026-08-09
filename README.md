@@ -161,9 +161,82 @@ Sends a JSON payload:
   "session": { "id": "...", "title": "..." },
   "project": { "id": "...", "directory": "..." },
   "desktopUrl": "https://...",
+  "hostname": "devbox",
   "timestamp": "2026-02-04T12:00:00Z"
 }
 ```
+
+#### Parent instance (sub-instances)
+
+Forward every notification to another oc-notifier that owns the real Discord /
+Teams / webhook configuration. Child instances keep their own OpenCode
+`desktopBaseUrl`, project directories, and hostnames in the payload — only
+delivery is centralized.
+
+**Parent** (central machine — enable ingest + Discord/Teams/etc.):
+
+```json
+{
+  "ingest": {
+    "enabled": true,
+    "host": "0.0.0.0",
+    "port": 4100,
+    "token": "shared-secret"
+  },
+  "providers": [
+    {
+      "type": "discord",
+      "enabled": true,
+      "webhookUrl": "https://discord.com/api/webhooks/..."
+    }
+  ]
+}
+```
+
+**Child** (edge machine — no local webhooks):
+
+```json
+{
+  "opencode": {
+    "baseUrl": "http://127.0.0.1:4096",
+    "desktopBaseUrl": "https://opencode-on-this-host.example.com"
+  },
+  "providers": [
+    {
+      "type": "parent",
+      "enabled": true,
+      "url": "http://central-notifier.example.com:4100",
+      "token": "shared-secret"
+    }
+  ]
+}
+```
+
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| `url` | string | Yes | Parent ingest base URL (e.g. `http://host:4100`) or full `/v1/notify` URL |
+| `token` | string | No | Bearer token matching the parent's `ingest.token` (recommended when the parent is not loopback-only) |
+| `maxHops` | number | No | Max parent forwards before drop (default: `8`). Guards against accidental cycles |
+| `timeoutMs` | number | No | HTTP timeout for the parent notify request in ms (default: `10000`) |
+
+The child POSTs a normalized payload to the parent's `POST /v1/notify`, including
+`hostname`, `projectDirectory`, and `desktopUrl` from the origin instance so
+Discord/Teams still show the correct machine, path, and OpenCode desktop link.
+
+**Semantics across hops:**
+
+- **Debounce** (`debounceMs`) runs only on the origin OpenCode SSE monitor. Parent
+  delivery does not re-debounce forwarded events.
+- **`ignoreDirectories`** is applied on every hop against the origin
+  `projectDirectory` string. Configure ignores on the child for child-local
+  paths (e.g. `/tmp` probes). Configure the same absolute paths on the parent
+  only if you intentionally want central filtering by those path strings.
+- Set `ingest.token` on any parent whose ingest binds beyond loopback
+  (`host: "0.0.0.0"`), and use the same value as the child's `providers[].token`.
+  Without a token, a network-reachable parent is an open notification relay.
+
+> Avoid cycles (A → B → A). Nested children are fine as a tree; `maxHops` drops
+> runaway chains.
 
 ## Claude Code
 
@@ -297,10 +370,10 @@ docker run -v /path/to/config.json:/config/config.json oc-notifier
 │                                         │   Registry      │ │
 │                                         └────────┬────────┘ │
 │                    ┌─────────────────────────────┼─────────┐│
-│                    ▼              ▼              ▼         ││
-│              ┌─────────┐   ┌───────────┐   ┌───────────┐   ││
-│              │ Discord │   │ MS Teams  │   │  Webhook  │   ││
-│              └─────────┘   └───────────┘   └───────────┘   ││
+│                    ▼         ▼          ▼        ▼         ││
+│              ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐   ││
+│              │Discord │ │MS Teams│ │Webhook │ │ Parent │   ││
+│              └────────┘ └────────┘ └────────┘ └────────┘   ││
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -328,9 +401,11 @@ docker run -v /path/to/config.json:/config/config.json oc-notifier
 └────────────────┘     │   oc-notifier   │────>│ Teams /        │
 ┌────────────────┐     │                 │     │ Webhook        │
 │ Claude / Grok  │────>│  ingest HTTP    │     └────────────────┘
-│ / Codex /      │     └─────────────────┘
-│ Copilot hooks  │
-└────────────────┘
+│ / Codex /      │     └────────▲────────┘
+│ Copilot hooks  │              │ parent provider
+└────────────────┘     ┌────────┴────────┐
+                       │ child instances │
+                       └─────────────────┘
 ```
 
 ## License

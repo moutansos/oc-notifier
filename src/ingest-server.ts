@@ -123,8 +123,9 @@ export class IngestServer {
 
     try {
       const notification = parseNotifyBody(body);
+      const host = notification.hostname ? ` host=${notification.hostname}` : "";
       console.log(
-        `Ingest /v1/notify: type=${notification.type} source=${notification.source ?? "opencode"} session=${notification.sessionId}`
+        `Ingest /v1/notify: type=${notification.type} source=${notification.source ?? "opencode"} session=${notification.sessionId}${host}`
       );
       await this.notifier.send(notification);
       return json({ ok: true });
@@ -251,7 +252,8 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-function parseNotifyBody(body: unknown): Notification {
+/** Parse a normalized /v1/notify JSON body into a Notification (exported for tests). */
+export function parseNotifyBody(body: unknown): Notification {
   if (typeof body !== "object" || body === null) {
     throw new Error("Body must be a JSON object");
   }
@@ -287,6 +289,15 @@ function parseNotifyBody(body: unknown): Notification {
     source = obj.source;
   }
 
+  // Prefer original event time when forwarded from a child instance.
+  let timestamp = new Date();
+  if (typeof obj.timestamp === "string" && obj.timestamp) {
+    const parsed = new Date(obj.timestamp);
+    if (!Number.isNaN(parsed.getTime())) {
+      timestamp = parsed;
+    }
+  }
+
   const notification: Notification = {
     type: type as NotificationType,
     source,
@@ -295,8 +306,21 @@ function parseNotifyBody(body: unknown): Notification {
     projectId,
     projectDirectory,
     desktopUrl,
-    timestamp: new Date(),
+    timestamp,
   };
+
+  // Child host must win so parent providers show the origin machine.
+  if (typeof obj.hostname === "string" && obj.hostname.trim()) {
+    notification.hostname = obj.hostname.trim();
+  }
+
+  if (
+    typeof obj.hops === "number" &&
+    Number.isInteger(obj.hops) &&
+    obj.hops >= 0
+  ) {
+    notification.hops = obj.hops;
+  }
 
   if (typeof obj.question === "string") {
     notification.question = obj.question;
