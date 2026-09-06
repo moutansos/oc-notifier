@@ -41,6 +41,12 @@ Create a `config.json` file (see `config.example.json` for reference):
     "username": "opencode",
     "password": "your-password"
   },
+  "opencode2": {
+    "baseUrl": "http://127.0.0.1:4096",
+    "desktopBaseUrl": "https://opencode2.example.com",
+    "username": "opencode",
+    "password": "your-password"
+  },
   "ingest": {
     "enabled": true,
     "host": "127.0.0.1",
@@ -57,7 +63,7 @@ Create a `config.json` file (see `config.example.json` for reference):
 }
 ```
 
-At least one of `opencode` or `ingest` (with `enabled: true`) is required. You can run OpenCode-only, ingest-only (Claude/Grok/Codex/Copilot plugins), or both.
+At least one of `opencode`, `opencode2`, or `ingest` (with `enabled: true`) is required. You can run OpenCode v1, OpenCode 2, both, ingest-only (Claude/Grok/Codex/Copilot plugins), or any combination.
 
 ### General Settings
 
@@ -75,6 +81,8 @@ idle session.
 
 ### OpenCode Settings
 
+`opencode` monitors OpenCode v1 via `/global/event`. `opencode2` monitors OpenCode 2 via `/api/event`. The blocks have the same fields and are independent — include one, both, or neither (if ingest is enabled).
+
 | Option | Type | Required | Description |
 |--------|------|----------|-------------|
 | `baseUrl` | string | Yes* | OpenCode server API URL |
@@ -82,7 +90,7 @@ idle session.
 | `username` | string | No | HTTP Basic Auth username |
 | `password` | string | No | HTTP Basic Auth password |
 
-\*Required when the `opencode` block is present.
+\*Required when that block (`opencode` or `opencode2`) is present.
 
 ### Ingest API (Claude Code / Grok / Codex / Copilot CLI / external clients)
 
@@ -379,7 +387,7 @@ docker run -v /path/to/config.json:/config/config.json oc-notifier
 
 ### How It Works
 
-**OpenCode (SSE):**
+**OpenCode v1 (SSE):**
 
 1. The SSE client connects to OpenCode's `/global/event` endpoint
 2. When a `session.status` event with `status.type === "idle"` is received:
@@ -387,6 +395,13 @@ docker run -v /path/to/config.json:/config/config.json oc-notifier
    - Fetches session info via the `/session/:id` API
    - Dispatches notifications to all enabled providers
 3. Question and permission events are forwarded similarly
+
+**OpenCode 2 (SSE):**
+
+1. The SSE client connects to OpenCode 2's `/api/event` endpoint
+2. Idle is derived from `session.next.step.ended` / `session.next.step.failed` (and confirmed via `/api/session/active`) because `session.status` is not on the v2 HTTP event contract
+3. `question.v2.asked` and `permission.v2.asked` are forwarded similarly
+4. Session info is fetched from `/api/session/:id`
 
 > **One card per prompt:** OpenCode describes a single ask twice — the
 > `question.asked` / `permission.asked` event and the underlying tool part (older
@@ -403,9 +418,12 @@ docker run -v /path/to/config.json:/config/config.json oc-notifier
 ```
 ┌────────────────┐     ┌─────────────────┐     ┌────────────────┐
 │ OpenCode SSE   │────>│                 │     │ Discord /      │
-└────────────────┘     │   oc-notifier   │────>│ Teams /        │
-┌────────────────┐     │                 │     │ Webhook        │
-│ Claude / Grok  │────>│  ingest HTTP    │     └────────────────┘
+└────────────────┘     │                 │     │ Teams /        │
+┌────────────────┐     │   oc-notifier   │────>│ Webhook        │
+│ OpenCode 2 SSE │────>│                 │     └────────────────┘
+└────────────────┘     │                 │
+┌────────────────┐     │  ingest HTTP    │
+│ Claude / Grok  │────>│                 │
 │ / Codex /      │     └────────▲────────┘
 │ Copilot hooks  │              │ parent provider
 └────────────────┘     ┌────────┴────────┐

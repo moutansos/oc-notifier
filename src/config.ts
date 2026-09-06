@@ -67,13 +67,18 @@ export type ProviderConfig =
 
 export interface Config {
   /**
-   * OpenCode SSE monitoring. Optional when ingest is enabled (Claude Code only).
-   * When present, connects to OpenCode's global event stream.
+   * OpenCode v1 SSE monitoring (`/global/event`). Optional when ingest or
+   * opencode2 is configured. When present, connects to OpenCode's global event stream.
    */
   opencode?: OpenCodeConfig;
   /**
+   * OpenCode v2 SSE monitoring (`/api/event`). Optional when ingest or
+   * opencode is configured. Same shape as `opencode`; both may be set at once.
+   */
+  opencode2?: OpenCodeConfig;
+  /**
    * HTTP ingest server for external clients (Claude / Grok / Codex plugins).
-   * Optional when opencode is configured.
+   * Optional when opencode or opencode2 is configured.
    */
   ingest?: IngestConfig;
   providers: ProviderConfig[];
@@ -88,27 +93,27 @@ export interface Config {
   ignoreDirectories: string[];
 }
 
-function validateOpenCodeConfig(config: unknown): OpenCodeConfig {
+function validateOpenCodeConfig(config: unknown, field: "opencode" | "opencode2"): OpenCodeConfig {
   if (typeof config !== "object" || config === null) {
-    throw new Error("opencode config must be an object");
+    throw new Error(`${field} config must be an object`);
   }
 
   const obj = config as Record<string, unknown>;
 
   if (typeof obj.baseUrl !== "string" || !obj.baseUrl) {
-    throw new Error("opencode.baseUrl is required and must be a string");
+    throw new Error(`${field}.baseUrl is required and must be a string`);
   }
 
   if (typeof obj.desktopBaseUrl !== "string" || !obj.desktopBaseUrl) {
-    throw new Error("opencode.desktopBaseUrl is required and must be a string");
+    throw new Error(`${field}.desktopBaseUrl is required and must be a string`);
   }
 
   if (obj.username !== undefined && typeof obj.username !== "string") {
-    throw new Error("opencode.username must be a string if provided");
+    throw new Error(`${field}.username must be a string if provided`);
   }
 
   if (obj.password !== undefined && typeof obj.password !== "string") {
-    throw new Error("opencode.password must be a string if provided");
+    throw new Error(`${field}.password must be a string if provided`);
   }
 
   return {
@@ -277,7 +282,11 @@ function validateConfig(config: unknown): Config {
   const obj = config as Record<string, unknown>;
 
   const opencode = obj.opencode !== undefined
-    ? validateOpenCodeConfig(obj.opencode)
+    ? validateOpenCodeConfig(obj.opencode, "opencode")
+    : undefined;
+
+  const opencode2 = obj.opencode2 !== undefined
+    ? validateOpenCodeConfig(obj.opencode2, "opencode2")
     : undefined;
 
   const ingest = obj.ingest !== undefined
@@ -285,9 +294,9 @@ function validateConfig(config: unknown): Config {
     : undefined;
 
   const ingestEnabled = ingest?.enabled === true;
-  if (!opencode && !ingestEnabled) {
+  if (!opencode && !opencode2 && !ingestEnabled) {
     throw new Error(
-      "At least one of opencode or ingest (with enabled: true) must be configured"
+      "At least one of opencode, opencode2, or ingest (with enabled: true) must be configured"
     );
   }
 
@@ -320,7 +329,7 @@ function validateConfig(config: unknown): Config {
     });
   }
 
-  return { opencode, ingest, providers, debounceMs, ignoreDirectories };
+  return { opencode, opencode2, ingest, providers, debounceMs, ignoreDirectories };
 }
 
 /** Strip trailing slashes so "/tmp/" and "/tmp" compare equal (keeps root "/"). */

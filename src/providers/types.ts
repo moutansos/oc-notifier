@@ -9,6 +9,7 @@ export type NotificationType = "idle" | "question" | "permission";
 /** Origin of the notification event */
 export type NotificationSource =
   | "opencode"
+  | "opencode2"
   | "claude-code"
   | "grok-code"
   | "codex"
@@ -67,6 +68,8 @@ export function sourceLabel(source: NotificationSource | undefined): string {
       return "Codex";
     case "copilot-cli":
       return "Copilot CLI";
+    case "opencode2":
+      return "OpenCode 2";
     default:
       return "OpenCode";
   }

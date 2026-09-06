@@ -9,7 +9,7 @@
 import type { EventDeduper } from "./event-dedupe.ts";
 import { permissionKeys, questionKeys } from "./event-dedupe.ts";
 import type { PermissionEvent, QuestionEvent, SessionInfo } from "./sse-client.ts";
-import type { Notification, NotificationChoice } from "./providers/types.ts";
+import type { Notification, NotificationChoice, NotificationSource } from "./providers/types.ts";
 
 export interface MonitorDeps {
   /** Reservations for question requests (id + tool call) */
@@ -21,6 +21,8 @@ export interface MonitorDeps {
   fetchSessionInfo(sessionID: string, directory: string): Promise<SessionInfo | null>;
   send(notification: Notification): Promise<void>;
   desktopBaseUrl: string;
+  /** Which OpenCode server produced the event ("opencode" or "opencode2") */
+  source: NotificationSource;
 }
 
 export function createQuestionHandler(
@@ -53,14 +55,17 @@ export function createQuestionHandler(
       return;
     }
 
+    // OpenCode 2 events omit the location, so fall back to the session's own directory
+    const projectDirectory = directory || sessionInfo?.directory || "";
+
     await deps.send({
       type: "question",
-      source: "opencode",
+      source: deps.source,
       sessionId: sessionID,
       sessionTitle: sessionInfo?.title || sessionID,
       projectId: sessionInfo?.projectID || "",
-      projectDirectory: directory,
-      desktopUrl: buildDesktopUrl(deps.desktopBaseUrl, directory, sessionID),
+      projectDirectory,
+      desktopUrl: buildDesktopUrl(deps.desktopBaseUrl, projectDirectory, sessionID),
       timestamp: new Date(),
       question: questionText,
       choices: buildQuestionChoices(question),
@@ -96,14 +101,17 @@ export function createPermissionHandler(
       return;
     }
 
+    // OpenCode 2 events omit the location, so fall back to the session's own directory
+    const projectDirectory = directory || sessionInfo?.directory || "";
+
     await deps.send({
       type: "permission",
-      source: "opencode",
+      source: deps.source,
       sessionId: sessionID,
       sessionTitle: sessionInfo?.title || sessionID,
       projectId: sessionInfo?.projectID || "",
-      projectDirectory: directory,
-      desktopUrl: buildDesktopUrl(deps.desktopBaseUrl, directory, sessionID),
+      projectDirectory,
+      desktopUrl: buildDesktopUrl(deps.desktopBaseUrl, projectDirectory, sessionID),
       timestamp: new Date(),
       permissionTitle: permission.title,
       permissionType: permission.permissionType,
