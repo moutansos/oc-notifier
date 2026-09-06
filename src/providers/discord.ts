@@ -3,6 +3,7 @@
  *
  * Per-message overrides:
  * - username: "{Harness} · {machine}"
+ * - embed title: "{project} · {session}"
  * - avatar_url: harness icon (Claude vs OpenCode)
  */
 
@@ -60,17 +61,14 @@ export class DiscordProvider implements NotificationProvider {
     const harness = sourceLabel(source);
     // Prefer stamped/forwarded hostname so parent delivery shows the child host
     const machine = displayHostname(notification.hostname);
-    // Discord author line + embed title: harness and machine
+    // Webhook username (sender name at the top of the message)
     const identity = `${harness} · ${machine}`;
     const hasLink = Boolean(notification.desktopUrl);
 
     const isQuestion = notification.type === "question";
     const isPermission = notification.type === "permission";
-    const eventLabel = isPermission
-      ? "Permission required"
-      : isQuestion
-        ? "Question pending"
-        : "Session idle";
+    const sessionName = notification.sessionTitle || notification.sessionId;
+    const title = truncateField(`${projectName} · ${sessionName}`, 256);
     const status = isPermission
       ? "Waiting for permission"
       : isQuestion
@@ -83,21 +81,6 @@ export class DiscordProvider implements NotificationProvider {
         : 0x5865f2; // Red / orange / blurple
 
     const fields = [
-      {
-        name: "Event",
-        value: eventLabel,
-        inline: true,
-      },
-      {
-        name: "Project",
-        value: projectName,
-        inline: true,
-      },
-      {
-        name: "Session",
-        value: notification.sessionTitle || notification.sessionId,
-        inline: true,
-      },
       {
         name: "Status",
         value: status,
@@ -136,7 +119,7 @@ export class DiscordProvider implements NotificationProvider {
       : identity;
 
     const embed: Record<string, unknown> = {
-      title: identity,
+      title,
       color,
       fields,
       timestamp: notification.timestamp.toISOString(),

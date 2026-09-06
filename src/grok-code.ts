@@ -10,9 +10,16 @@
  *   allowlist and ignore unknown types (same default as Claude mapping) so monitor
  *   line spam does not become fake permission alerts.
  * - Observed real types are logged at ingest so the allowlist can be refined.
+ * - Hooks do not include the session title. Grok stores it in
+ *   `$GROK_HOME/sessions/<urlencoded-cwd>/<sessionId>/summary.json`
+ *   (`generated_title`). We read that on notify so Discord/Teams show it.
  *
  * @see ~/.grok/docs/user-guide/10-hooks.md
+ * @see ~/.grok/docs/user-guide/17-sessions.md
  */
+
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 import type { Notification, NotificationChoice } from "./providers/types.ts";
 
@@ -63,10 +70,35 @@ const questionNotificationTypes = new Set([
   "question",
 ]);
 
+export interface MapGrokCodeHookOptions {
+  /** Override `$GROK_HOME` / `~/.grok` (tests). */
+  grokHome?: string;
+}
+
 /**
  * Convert a Grok hook payload into a Notification, or null if ignored.
  */
-export function mapGrokCodeHook(payload: GrokCodeHookPayload): Notification | null {
+export async function mapGrokCodeHook(
+  payload: GrokCodeHookPayload,
+  options?: MapGrokCodeHookOptions
+): Promise<Notification | null> {
+  const notification = classifyGrokHook(payload);
+  if (!notification) {
+    return null;
+  }
+
+  const title = await readGrokSessionTitle(
+    notification.sessionId,
+    notification.projectDirectory,
+    options?.grokHome
+  );
+  if (title) {
+    notification.sessionTitle = title;
+  }
+  return notification;
+}
+
+function classifyGrokHook(payload: GrokCodeHookPayload): Notification | null {
   const sessionId = payload.sessionId || payload.session_id || "unknown";
   const projectDirectory = payload.cwd || payload.workspaceRoot || "";
   const projectName =
@@ -109,6 +141,101 @@ export function mapGrokCodeHook(payload: GrokCodeHookPayload): Notification | nu
   }
 
   return null;
+}
+
+/**
+ * Read Grok's on-disk session title (`generated_title` in summary.json).
+ * Fail-open: missing files or unreadable JSON leave the project-name fallback.
+ */
+export async function readGrokSessionTitle(
+  sessionId: string,
+  cwd: string,
+  grokHome?: string
+): Promise<string | undefined> {
+  if (!sessionId || sessionId === "unknown" || !isSafeSessionId(sessionId)) {
+    return undefined;
+  }
+
+  try {
+    const home = resolveGrokHome(grokHome);
+    const sessionsRoot = join(home, "sessions");
+
+    const candidates: string[] = [];
+    if (cwd) {
+      const trimmed = cwd.replace(/[\\/]+$/, "") || cwd;
+      candidates.push(
+        join(sessionsRoot, encodeURIComponent(trimmed), sessionId, "summary.json")
+      );
+      if (!cwd.endsWith("/") && !cwd.endsWith("\\")) {
+        candidates.push(
+          join(
+            sessionsRoot,
+            encodeURIComponent(`${trimmed}/`),
+            sessionId,
+            "summary.json"
+          )
+        );
+      }
+    }
+
+    for (const path of candidates) {
+      const title = await titleFromSummary(path);
+      if (title) {
+        return title;
+      }
+    }
+
+    // Encoded cwd > 255 bytes uses a slug+hash group; find by session id.
+    const glob = new Bun.Glob(`*/${sessionId}/summary.json`);
+    for await (const rel of glob.scan({ cwd: sessionsRoot, onlyFiles: true })) {
+      const title = await titleFromSummary(join(sessionsRoot, rel));
+      if (title) {
+        return title;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
+function resolveGrokHome(override?: string): string {
+  if (override && override.trim()) {
+    return override.trim();
+  }
+  const env = process.env.GROK_HOME?.trim();
+  if (env) {
+    return env;
+  }
+  return join(homedir(), ".grok");
+}
+
+function isSafeSessionId(sessionId: string): boolean {
+  return /^[A-Za-z0-9._-]+$/.test(sessionId);
+}
+
+async function titleFromSummary(path: string): Promise<string | undefined> {
+  const file = Bun.file(path);
+  if (!(await file.exists())) {
+    return undefined;
+  }
+  try {
+    const data = (await file.json()) as Record<string, unknown>;
+    const generated =
+      typeof data.generated_title === "string" ? data.generated_title.trim() : "";
+    if (generated) {
+      return generated;
+    }
+    const summary =
+      typeof data.session_summary === "string" ? data.session_summary.trim() : "";
+    if (summary) {
+      return summary;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 export function summarizeGrokPayload(payload: GrokCodeHookPayload): string {

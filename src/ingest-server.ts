@@ -173,7 +173,7 @@ export class IngestServer {
     // from real traffic (Grok does not document notificationType values).
     console.log(`Ingest /v1/grok-code/hook: raw ${summarizeGrokPayload(payload)}`);
 
-    const notification = mapGrokCodeHook(payload);
+    const notification = await mapGrokCodeHook(payload);
     const eventName = payload.hookEventName ?? payload.hook_event_name ?? "?";
 
     if (!notification) {
@@ -184,7 +184,7 @@ export class IngestServer {
     }
 
     console.log(
-      `Ingest /v1/grok-code/hook: type=${notification.type} session=${notification.sessionId} event=${eventName}`
+      `Ingest /v1/grok-code/hook: type=${notification.type} session=${notification.sessionId} title=${JSON.stringify(notification.sessionTitle)} event=${eventName}`
     );
     await this.notifier.send(notification);
     return json({ ok: true });
