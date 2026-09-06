@@ -26,6 +26,7 @@ const harnessAvatarUrl: Record<NotificationSource, string> = {
   codex: "https://www.google.com/s2/favicons?domain=openai.com&sz=128",
   "copilot-cli": "https://www.google.com/s2/favicons?domain=github.com&sz=128",
   opencode: "https://www.google.com/s2/favicons?domain=opencode.ai&sz=128",
+  opencode2: "https://www.google.com/s2/favicons?domain=opencode.ai&sz=128",
 };
 
 function truncateField(value: string, maxLength = 1024): string {
@@ -146,7 +147,7 @@ export class DiscordProvider implements NotificationProvider {
             {
               type: 2, // Button
               style: 5, // Link button
-              label: source === "opencode"
+              label: source === "opencode" || source === "opencode2"
                 ? "Open in OpenCode Desktop"
                 : "Open session",
               url: notification.desktopUrl,

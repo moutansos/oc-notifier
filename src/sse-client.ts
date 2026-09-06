@@ -143,6 +143,7 @@ export interface SessionInfo {
   parentSessionID?: string;
   title: string;
   projectID: string;
+  directory?: string;
 }
 
 type EventHandler = (event: SessionStatusEvent, directory: string) => void;

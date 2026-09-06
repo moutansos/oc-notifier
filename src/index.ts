@@ -1,15 +1,16 @@
 /**
  * oc-notifier - CLI entry point
  *
- * Connects to an OpenCode server's SSE stream and/or listens for HTTP ingest
- * events (Claude Code / Grok / Codex / Copilot CLI hooks) and sends push
- * notifications when sessions become idle, when a question is asked, or when
- * a permission request is pending.
+ * Connects to OpenCode v1 and/or OpenCode 2 SSE streams and/or listens for
+ * HTTP ingest events (Claude Code / Grok / Codex / Copilot CLI hooks) and
+ * sends push notifications when sessions become idle, when a question is
+ * asked, or when a permission request is pending.
  */
 
 import { parseArgs } from "util";
-import { loadConfig } from "./config.ts";
+import { loadConfig, type OpenCodeConfig } from "./config.ts";
 import { SSEClient } from "./sse-client.ts";
+import { SSEClientV2 } from "./sse-client-v2.ts";
 import { createProviders, type Notification } from "./providers/index.ts";
 import { Notifier } from "./notifier.ts";
 import { IngestServer } from "./ingest-server.ts";
@@ -24,6 +25,20 @@ import {
   createQuestionHandler,
   type MonitorDeps,
 } from "./opencode-monitor.ts";
+
+import type { PermissionEvent, QuestionEvent, SessionInfo, SessionStatusEvent } from "./sse-client.ts";
+import type { NotificationSource } from "./providers/types.ts";
+
+/** Shared surface of the v1 and v2 SSE clients used by the monitor setup */
+interface SessionMonitor {
+  onSessionStatus(handler: (event: SessionStatusEvent, directory: string) => void): void;
+  onQuestion(handler: (question: QuestionEvent, directory: string) => void): void;
+  onPermission(handler: (permission: PermissionEvent, directory: string) => void): void;
+  fetchSessionInfo(sessionId: string, directory: string): Promise<SessionInfo | null>;
+  confirmIdle?(sessionID: string): Promise<boolean>;
+  start(): Promise<void>;
+  stop(): void;
+}
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -168,18 +183,38 @@ async function main() {
     ingestServer.start();
   }
 
-  // OpenCode SSE monitoring (optional when only ingest is used)
-  let sseClient: SSEClient | null = null;
+  // OpenCode SSE monitoring (v1 and/or v2; optional when only ingest is used)
+  const monitors: SessionMonitor[] = [];
   if (config.opencode) {
-    sseClient = setupOpenCodeMonitoring(config.opencode, config.debounceMs, notifier);
+    monitors.push(setupOpenCodeMonitoring(
+      new SSEClient(config.opencode),
+      config.opencode,
+      config.debounceMs,
+      notifier,
+      "opencode",
+    ));
   } else {
     console.log("OpenCode SSE monitoring disabled (no opencode config)");
+  }
+
+  if (config.opencode2) {
+    monitors.push(setupOpenCodeMonitoring(
+      new SSEClientV2(config.opencode2),
+      config.opencode2,
+      config.debounceMs,
+      notifier,
+      "opencode2",
+    ));
+  } else {
+    console.log("OpenCode 2 SSE monitoring disabled (no opencode2 config)");
   }
 
   // Handle graceful shutdown
   const shutdown = () => {
     console.log("\nShutting down...");
-    sseClient?.stop();
+    for (const monitor of monitors) {
+      monitor.stop();
+    }
     ingestServer?.stop();
     process.exit(0);
   };
@@ -189,8 +224,8 @@ async function main() {
 
   console.log("Starting oc-notifier...");
 
-  if (sseClient) {
-    await sseClient.start();
+  if (monitors.length > 0) {
+    await Promise.all(monitors.map((monitor) => monitor.start()));
   } else {
     // Keep process alive for ingest-only mode
     console.log("Running in ingest-only mode (waiting for HTTP events)...");
@@ -199,12 +234,12 @@ async function main() {
 }
 
 function setupOpenCodeMonitoring(
-  opencodeConfig: NonNullable<Awaited<ReturnType<typeof loadConfig>>["opencode"]>,
+  sseClient: SessionMonitor,
+  opencodeConfig: OpenCodeConfig,
   debounceMs: number,
-  notifier: Notifier
-): SSEClient {
-  const sseClient = new SSEClient(opencodeConfig);
-
+  notifier: Notifier,
+  source: NotificationSource,
+): SessionMonitor {
   // Track previous session status to detect transitions TO idle
   // Map of sessionID -> { status, lastSeen }
   const sessionState = new Map<string, { status: string; lastSeen: number }>();
@@ -233,9 +268,9 @@ function setupOpenCodeMonitoring(
     }
   }, CLEANUP_INTERVAL_MS);
 
-  console.log(`Debounce delay: ${debounceMs}ms`);
+  console.log(`Debounce delay: ${debounceMs}ms (${source})`);
 
-  // Handle session status events (from all projects via /global/event)
+  // Handle session status events
   sseClient.onSessionStatus(async (event, directory) => {
     const { sessionID, status } = event.properties;
     const prevState = sessionState.get(sessionID);
@@ -296,17 +331,27 @@ function setupOpenCodeMonitoring(
           return;
         }
 
-        console.log(`Session ${sessionID} still idle, sending notification (project: ${directory})`);
+        if (sseClient.confirmIdle) {
+          const stillIdle = await sseClient.confirmIdle(sessionID);
+          if (!stillIdle) {
+            console.log(`Session ${sessionID} still active on server, skipping notification`);
+            sessionState.set(sessionID, { status: "busy", lastSeen: Date.now() });
+            return;
+          }
+        }
+
+        const projectDirectory = directory || sessionInfo?.directory || "";
+        console.log(`Session ${sessionID} still idle, sending notification (project: ${projectDirectory})`);
         console.log(`[DEBUG] sessionInfo: ${JSON.stringify(sessionInfo)}`);
 
         const notification: Notification = {
           type: "idle",
-          source: "opencode",
+          source,
           sessionId: sessionID,
           sessionTitle: sessionInfo?.title || sessionID,
           projectId: sessionInfo?.projectID || "",
-          projectDirectory: directory,
-          desktopUrl: buildDesktopUrl(opencodeConfig.desktopBaseUrl, directory, sessionID),
+          projectDirectory,
+          desktopUrl: buildDesktopUrl(opencodeConfig.desktopBaseUrl, projectDirectory, sessionID),
           timestamp: new Date(),
         };
 
@@ -329,6 +374,7 @@ function setupOpenCodeMonitoring(
       sseClient.fetchSessionInfo(sessionID, directory),
     send: (notification) => notifier.send(notification),
     desktopBaseUrl: opencodeConfig.desktopBaseUrl,
+    source,
   };
 
   setInterval(() => {

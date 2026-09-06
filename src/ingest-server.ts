@@ -282,6 +282,7 @@ export function parseNotifyBody(body: unknown): Notification {
   if (
     obj.source === "claude-code" ||
     obj.source === "opencode" ||
+    obj.source === "opencode2" ||
     obj.source === "grok-code" ||
     obj.source === "codex" ||
     obj.source === "copilot-cli"

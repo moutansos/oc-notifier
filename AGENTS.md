@@ -4,8 +4,9 @@ This document provides guidelines for AI coding agents working in this repositor
 
 ## Project Overview
 
-oc-notifier is a CLI tool that monitors OpenCode sessions via SSE (Server-Sent Events)
-and sends push notifications when sessions become idle. Built with Bun and TypeScript.
+oc-notifier is a CLI tool that monitors OpenCode (v1 and/or v2) sessions via SSE
+(Server-Sent Events) and sends push notifications when sessions become idle.
+Built with Bun and TypeScript.
 
 ## Build & Run Commands
 
@@ -72,7 +73,8 @@ src/
 ├── index.ts              # CLI entry point, main() function
 ├── config.ts             # Configuration loading & validation
 ├── notifier.ts           # Notification dispatcher
-├── sse-client.ts         # SSE connection to OpenCode server
+├── sse-client.ts         # SSE connection to OpenCode v1 (/global/event)
+├── sse-client-v2.ts      # SSE connection to OpenCode 2 (/api/event)
 ├── opencode-monitor.ts   # OpenCode question/permission handlers → Notification
 ├── event-dedupe.ts       # One-notification-per-request reservations
 ├── ingest-server.ts      # HTTP ingest API for Claude / Grok / Codex / Copilot / external clients

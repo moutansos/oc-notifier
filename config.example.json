@@ -5,6 +5,12 @@
     "username": "opencode",
     "password": "your-password"
   },
+  "opencode2": {
+    "baseUrl": "http://127.0.0.1:4096",
+    "desktopBaseUrl": "https://opencode2.example.com",
+    "username": "opencode",
+    "password": "your-password"
+  },
   "ingest": {
     "enabled": true,
     "host": "127.0.0.1",

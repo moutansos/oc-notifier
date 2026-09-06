@@ -75,6 +75,7 @@ function harness(sessionInfo: SessionInfo | null = null): Harness {
         sent.push(notification);
       },
       desktopBaseUrl: "https://oc.example.com",
+      source: "opencode",
     },
   };
 }
