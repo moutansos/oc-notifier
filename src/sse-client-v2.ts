@@ -27,18 +27,26 @@ type EventHandler = (event: SessionStatusEvent, directory: string) => void;
 type QuestionHandler = (question: QuestionEvent, directory: string) => void;
 type PermissionHandler = (permission: PermissionEvent, directory: string) => void;
 
+/**
+ * Turn start. `session.step.started` is the signal actually observed on the
+ * wire for every turn; the execution/compaction entries are additive so a turn
+ * that begins with compaction or an explicit execution event still counts.
+ */
 const busyEventTypes = new Set([
-  "session.next.prompted",
-  "session.next.prompt.admitted",
-  "session.next.step.started",
-  "session.next.retried",
-  "session.next.compaction.started",
+  "session.execution.started",
+  "session.step.started",
+  "session.compaction.started",
+  "session.retry.scheduled",
 ]);
 
+/**
+ * Turn end. These are execution-level (one per turn), unlike `session.step.*`
+ * which fires between every tool call mid-turn and would notify far too early.
+ */
 const idleEventTypes = new Set([
-  "session.next.step.ended",
-  "session.next.step.failed",
-  "session.next.compaction.ended",
+  "session.execution.succeeded",
+  "session.execution.failed",
+  "session.execution.interrupted",
 ]);
 
 /** Classify a V2 event type as session busy, idle-candidate, or neither. */
@@ -275,20 +283,6 @@ export class SSEClientV2 {
       const directory = event.location?.directory ?? "";
       const data = event.data ?? {};
 
-      if (event.type === "session.status") {
-        const sessionID = data.sessionID;
-        const status = data.status;
-        if (typeof sessionID !== "string" || typeof status !== "object" || status === null) {
-          return;
-        }
-        const statusType = (status as { type?: unknown }).type;
-        if (statusType !== "idle" && statusType !== "busy" && statusType !== "retry") {
-          return;
-        }
-        this.emitSessionStatus(sessionID, status as SessionStatusEvent["properties"]["status"], directory);
-        return;
-      }
-
       const classified = classifyV2SessionEvent(event.type);
       if (classified) {
         const sessionID = data.sessionID;
@@ -299,7 +293,7 @@ export class SSEClientV2 {
         return;
       }
 
-      if (event.type === "question.v2.asked") {
+      if (event.type === "form.created") {
         const normalized = normalizeQuestionRequest(data);
         if (!normalized) return;
         for (const handler of this.questionHandlers) {
@@ -308,7 +302,7 @@ export class SSEClientV2 {
         return;
       }
 
-      if (event.type === "permission.v2.asked") {
+      if (event.type === "permission.asked") {
         const normalized = normalizePermissionRequest(data);
         if (!normalized) return;
         for (const handler of this.permissionHandlers) {
@@ -347,15 +341,18 @@ function asStringArray(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string");
 }
 
-/** Tool call behind a request, used to collapse duplicate events for one ask */
-function toolCallID(data: Record<string, unknown>): string | undefined {
-  const tool = data.tool;
-  if (typeof tool !== "object" || tool === null) return undefined;
-  const callID = (tool as { callID?: unknown }).callID;
-  return typeof callID === "string" ? callID : undefined;
+/**
+ * Tool call behind a request, used to collapse duplicate events for one ask.
+ * Both permission requests and forms carry it as `{ type, messageID, id }`.
+ */
+function toolCallID(source: unknown): string | undefined {
+  if (typeof source !== "object" || source === null) return undefined;
+  const id = (source as { id?: unknown }).id;
+  return typeof id === "string" ? id : undefined;
 }
 
-function normalizePermissionRequest(data: Record<string, unknown>): PermissionEvent | null {
+/** `permission.asked` carries a flat Permission.Request as its data. */
+export function normalizePermissionRequest(data: Record<string, unknown>): PermissionEvent | null {
   if (typeof data.id !== "string" || typeof data.sessionID !== "string") {
     return null;
   }
@@ -376,41 +373,73 @@ function normalizePermissionRequest(data: Record<string, unknown>): PermissionEv
     patterns: resources,
     alwaysPatterns: save.length > 0 ? save : resources,
     metadata,
-    callID: toolCallID(data),
+    callID: toolCallID(data.source),
   };
 }
 
-function normalizeQuestionRequest(data: Record<string, unknown>): QuestionEvent | null {
-  if (typeof data.id !== "string" || typeof data.sessionID !== "string") {
+/**
+ * `form.created` carries the request nested under `data.form`. Forms are a
+ * general prompt mechanism, so only those tagged `metadata.kind === "question"`
+ * become question notifications. Each form field is one question: `title` is
+ * the header and `description` holds the question text.
+ *
+ * `multiple` is intentionally left unset — the form schema has no verified
+ * field for it, and guessing would mislabel every prompt.
+ */
+export function normalizeQuestionRequest(data: Record<string, unknown>): QuestionEvent | null {
+  const form = data.form;
+  if (typeof form !== "object" || form === null) {
     return null;
   }
 
-  const rawQuestions = Array.isArray(data.questions) ? data.questions : [];
-  const questions: QuestionInfo[] = rawQuestions.map((item) => {
+  const f = form as Record<string, unknown>;
+  if (typeof f.id !== "string" || typeof f.sessionID !== "string") {
+    return null;
+  }
+
+  const metadata = typeof f.metadata === "object" && f.metadata !== null
+    ? f.metadata as Record<string, unknown>
+    : {};
+  if (metadata.kind !== "question") {
+    return null;
+  }
+
+  const rawFields = Array.isArray(f.fields) ? f.fields : [];
+  const questions: QuestionInfo[] = rawFields.map((item) => {
     const q = (typeof item === "object" && item !== null ? item : {}) as Record<string, unknown>;
     const options = Array.isArray(q.options) ? q.options : [];
     return {
-      question: typeof q.question === "string" ? q.question : "OpenCode is waiting for your input",
-      header: typeof q.header === "string" ? q.header : undefined,
+      question: typeof q.description === "string" && q.description
+        ? q.description
+        : typeof q.title === "string" && q.title
+          ? q.title
+          : "OpenCode is waiting for your input",
+      header: typeof q.title === "string" ? q.title : undefined,
       options: options.map((option) => {
         const o = (typeof option === "object" && option !== null ? option : {}) as Record<string, unknown>;
+        const label = typeof o.label === "string" && o.label
+          ? o.label
+          : typeof o.value === "string" && o.value
+            ? o.value
+            : "Option";
         return {
-          label: typeof o.label === "string" ? o.label : "Option",
+          label,
           description: typeof o.description === "string" ? o.description : undefined,
         };
       }),
-      multiple: typeof q.multiple === "boolean" ? q.multiple : undefined,
       custom: typeof q.custom === "boolean" ? q.custom : undefined,
     };
   });
 
   return {
-    id: data.id,
-    sessionID: data.sessionID,
+    id: f.id,
+    sessionID: f.sessionID,
     questions: questions.length > 0 ? questions : [{
-      question: "OpenCode is waiting for your input",
+      question: typeof f.title === "string" && f.title
+        ? f.title
+        : "OpenCode is waiting for your input",
       options: [],
     }],
-    callID: toolCallID(data),
+    callID: toolCallID(metadata.tool),
   };
 }
