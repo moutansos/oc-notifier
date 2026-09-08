@@ -21,6 +21,11 @@ export interface MonitorDeps {
   fetchSessionInfo(sessionID: string, directory: string): Promise<SessionInfo | null>;
   send(notification: Notification): Promise<void>;
   desktopBaseUrl: string;
+  /**
+   * Public URL of this OpenCode server as the web UI identifies it.
+   * Used for OpenCode 2 `/server/{base64(serverUrl)}/session/{id}` links.
+   */
+  serverUrl?: string;
   /** Which OpenCode server produced the event ("opencode" or "opencode2") */
   source: NotificationSource;
 }
@@ -65,7 +70,10 @@ export function createQuestionHandler(
       sessionTitle: sessionInfo?.title || sessionID,
       projectId: sessionInfo?.projectID || "",
       projectDirectory,
-      desktopUrl: buildDesktopUrl(deps.desktopBaseUrl, projectDirectory, sessionID),
+      desktopUrl: buildDesktopUrl(deps.desktopBaseUrl, projectDirectory, sessionID, {
+        source: deps.source,
+        serverUrl: deps.serverUrl,
+      }),
       timestamp: new Date(),
       question: questionText,
       choices: buildQuestionChoices(question),
@@ -111,7 +119,10 @@ export function createPermissionHandler(
       sessionTitle: sessionInfo?.title || sessionID,
       projectId: sessionInfo?.projectID || "",
       projectDirectory,
-      desktopUrl: buildDesktopUrl(deps.desktopBaseUrl, projectDirectory, sessionID),
+      desktopUrl: buildDesktopUrl(deps.desktopBaseUrl, projectDirectory, sessionID, {
+        source: deps.source,
+        serverUrl: deps.serverUrl,
+      }),
       timestamp: new Date(),
       permissionTitle: permission.title,
       permissionType: permission.permissionType,
@@ -169,16 +180,43 @@ function base64Encode(value: string): string {
     .replace(/=/g, "");
 }
 
+/** Strip trailing slashes and ensure an http(s) scheme, matching OpenCode's normalizeServerUrl. */
+export function normalizeServerUrl(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return "";
+  const withProtocol = /^https?:\/\//.test(trimmed) ? trimmed : `http://${trimmed}`;
+  return withProtocol.replace(/\/+$/, "");
+}
+
+export interface DesktopUrlOptions {
+  /** Which OpenCode UI to target. v2 uses server-keyed routes. */
+  source?: NotificationSource;
+  /**
+   * Public URL of the OpenCode 2 server as registered in the web UI.
+   * Ignored for v1 directory-keyed links.
+   */
+  serverUrl?: string;
+}
+
 /**
  * Build a deep link to a session in the OpenCode web/desktop UI.
- * Uses the directory-keyed route: /{base64(directory)}/session/{sessionId}
+ *
+ * OpenCode v1 (legacy): `/{base64(directory)}/session/{sessionId}`
+ * OpenCode 2: `/server/{base64(serverUrl)}/session/{sessionId}`
+ *
  * @see https://github.com/anomalyco/opencode/blob/dev/packages/app/src/utils/session-route.ts
  */
 export function buildDesktopUrl(
-  baseUrl: string,
+  desktopBaseUrl: string,
   directory: string,
-  sessionId: string
+  sessionId: string,
+  options: DesktopUrlOptions = {},
 ): string {
+  const origin = desktopBaseUrl.replace(/\/$/, "");
+  if (options.source === "opencode2") {
+    const encodedServer = base64Encode(normalizeServerUrl(options.serverUrl ?? ""));
+    return `${origin}/server/${encodedServer}/session/${sessionId}`;
+  }
   const encodedDirectory = base64Encode(directory);
-  return `${baseUrl.replace(/\/$/, "")}/${encodedDirectory}/session/${sessionId}`;
+  return `${origin}/${encodedDirectory}/session/${sessionId}`;
 }

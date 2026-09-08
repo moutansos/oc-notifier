@@ -43,7 +43,8 @@ Create a `config.json` file (see `config.example.json` for reference):
   },
   "opencode2": {
     "baseUrl": "http://127.0.0.1:4096",
-    "desktopBaseUrl": "https://opencode2.example.com",
+    "desktopBaseUrl": "https://beta.opencode.ai",
+    "serverUrl": "https://opencode2.example.com",
     "username": "opencode",
     "password": "your-password"
   },
@@ -86,11 +87,18 @@ idle session.
 | Option | Type | Required | Description |
 |--------|------|----------|-------------|
 | `baseUrl` | string | Yes* | OpenCode server API URL |
-| `desktopBaseUrl` | string | Yes* | Base URL for OpenCode Desktop links |
+| `desktopBaseUrl` | string | Yes* | Base URL for OpenCode Desktop / web UI links |
+| `serverUrl` | string | No | Public URL of this OpenCode 2 server as the web UI identifies it. Used to build `/server/{base64(serverUrl)}/session/{id}` links. Defaults to `baseUrl`. Ignored for v1 |
 | `username` | string | No | HTTP Basic Auth username |
 | `password` | string | No | HTTP Basic Auth password |
 
 \*Required when that block (`opencode` or `opencode2`) is present.
+
+OpenCode 2's web UI can talk to multiple servers, so session links are
+`{desktopBaseUrl}/server/{base64(serverUrl)}/session/{id}`. Set `serverUrl` to
+the public URL of that OpenCode 2 instance as the frontend knows it (for example
+`https://oc2.example.com`), not the local `baseUrl` oc-notifier uses to connect.
+v1 links remain `{desktopBaseUrl}/{base64(directory)}/session/{id}`.
 
 ### Ingest API (Claude Code / Grok / Codex / Copilot CLI / external clients)
 
@@ -402,6 +410,7 @@ docker run -v /path/to/config.json:/config/config.json oc-notifier
 2. Idle is derived from `session.next.step.ended` / `session.next.step.failed` (and confirmed via `/api/session/active`) because `session.status` is not on the v2 HTTP event contract
 3. `question.v2.asked` and `permission.v2.asked` are forwarded similarly
 4. Session info is fetched from `/api/session/:id`
+5. Desktop links are `/server/{base64(serverUrl)}/session/{id}` so the shared web UI can open the right backend
 
 > **One card per prompt:** OpenCode describes a single ask twice — the
 > `question.asked` / `permission.asked` event and the underlying tool part (older

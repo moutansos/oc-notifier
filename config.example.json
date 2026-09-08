@@ -7,7 +7,8 @@
   },
   "opencode2": {
     "baseUrl": "http://127.0.0.1:4096",
-    "desktopBaseUrl": "https://opencode2.example.com",
+    "desktopBaseUrl": "https://beta.opencode.ai",
+    "serverUrl": "https://opencode2.example.com",
     "username": "opencode",
     "password": "your-password"
   },

@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { EventDeduper } from "./event-dedupe.ts";
-import { createPermissionHandler, createQuestionHandler, type MonitorDeps } from "./opencode-monitor.ts";
+import {
+  buildDesktopUrl,
+  createPermissionHandler,
+  createQuestionHandler,
+  type MonitorDeps,
+} from "./opencode-monitor.ts";
 import { Notifier } from "./notifier.ts";
 import type { PermissionEvent, QuestionEvent, SessionInfo } from "./sse-client.ts";
 import type { Notification, NotificationProvider } from "./providers/types.ts";
@@ -256,5 +261,46 @@ describe("permission handler", () => {
       "question",
       "permission",
     ]);
+  });
+});
+
+describe("buildDesktopUrl", () => {
+  test("v1 uses the directory-keyed route", () => {
+    expect(
+      buildDesktopUrl("https://oc.example.com", "/home/dev/work/my-app", "ses_abc")
+    ).toBe("https://oc.example.com/L2hvbWUvZGV2L3dvcmsvbXktYXBw/session/ses_abc");
+  });
+
+  test("v2 uses the server-keyed route", () => {
+    expect(
+      buildDesktopUrl("https://beta.opencode.ai", "/unused", "ses_f8197c054ffevgLjcu7gVbZ7iQ", {
+        source: "opencode2",
+        serverUrl: "https://oc2-msyke-dev1.msyke.dev",
+      })
+    ).toBe(
+      "https://beta.opencode.ai/server/aHR0cHM6Ly9vYzItbXN5a2UtZGV2MS5tc3lrZS5kZXY/session/ses_f8197c054ffevgLjcu7gVbZ7iQ"
+    );
+  });
+
+  test("v2 strips trailing slashes on the frontend and server URLs", () => {
+    expect(
+      buildDesktopUrl("https://beta.opencode.ai/", "/unused", "ses_abc", {
+        source: "opencode2",
+        serverUrl: "https://oc2.example.com/",
+      })
+    ).toBe("https://beta.opencode.ai/server/aHR0cHM6Ly9vYzIuZXhhbXBsZS5jb20/session/ses_abc");
+  });
+
+  test("question notifications for opencode2 include the server-keyed link", async () => {
+    const { deps, sent } = harness();
+    deps.source = "opencode2";
+    deps.serverUrl = "https://oc2.example.com";
+    deps.desktopBaseUrl = "https://beta.opencode.ai";
+
+    await createQuestionHandler(deps)(questionAsked, directory);
+
+    expect(sent[0]?.desktopUrl).toBe(
+      "https://beta.opencode.ai/server/aHR0cHM6Ly9vYzIuZXhhbXBsZS5jb20/session/ses_abc"
+    );
   });
 });

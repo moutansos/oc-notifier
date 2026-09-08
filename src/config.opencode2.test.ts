@@ -83,6 +83,31 @@ describe("opencode / opencode2 config", () => {
     );
   });
 
+  test("accepts optional serverUrl on opencode2", async () => {
+    const opencode2 = {
+      ...opencodeBlock,
+      serverUrl: "https://oc2.example.com",
+    };
+    await withTempConfig(
+      { opencode2, providers },
+      async (path) => {
+        const config = await loadConfig(path);
+        expect(config.opencode2?.serverUrl).toBe("https://oc2.example.com");
+      }
+    );
+  });
+
+  test("rejects empty serverUrl", async () => {
+    await withTempConfig(
+      { opencode2: { ...opencodeBlock, serverUrl: "  " }, providers },
+      async (path) => {
+        await expect(loadConfig(path)).rejects.toThrow(
+          "opencode2.serverUrl must be a non-empty string if provided"
+        );
+      }
+    );
+  });
+
   test("reports opencode2 field names in validation errors", async () => {
     await withTempConfig(
       { opencode2: { desktopBaseUrl: "https://opencode2.example.com" }, providers },

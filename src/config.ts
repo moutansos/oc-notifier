@@ -5,6 +5,12 @@
 export interface OpenCodeConfig {
   baseUrl: string;
   desktopBaseUrl: string;
+  /**
+   * Public URL of this OpenCode server as the web UI identifies it.
+   * Used for OpenCode 2 session links (`/server/{base64(serverUrl)}/session/{id}`).
+   * Defaults to `baseUrl` when omitted. Ignored for OpenCode v1.
+   */
+  serverUrl?: string;
   username?: string;
   password?: string;
 }
@@ -108,6 +114,12 @@ function validateOpenCodeConfig(config: unknown, field: "opencode" | "opencode2"
     throw new Error(`${field}.desktopBaseUrl is required and must be a string`);
   }
 
+  if (obj.serverUrl !== undefined) {
+    if (typeof obj.serverUrl !== "string" || !obj.serverUrl.trim()) {
+      throw new Error(`${field}.serverUrl must be a non-empty string if provided`);
+    }
+  }
+
   if (obj.username !== undefined && typeof obj.username !== "string") {
     throw new Error(`${field}.username must be a string if provided`);
   }
@@ -119,6 +131,7 @@ function validateOpenCodeConfig(config: unknown, field: "opencode" | "opencode2"
   return {
     baseUrl: obj.baseUrl,
     desktopBaseUrl: obj.desktopBaseUrl,
+    ...(typeof obj.serverUrl === "string" ? { serverUrl: obj.serverUrl.trim() } : {}),
     username: obj.username as string | undefined,
     password: obj.password as string | undefined,
   };

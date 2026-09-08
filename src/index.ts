@@ -351,7 +351,10 @@ function setupOpenCodeMonitoring(
           sessionTitle: sessionInfo?.title || sessionID,
           projectId: sessionInfo?.projectID || "",
           projectDirectory,
-          desktopUrl: buildDesktopUrl(opencodeConfig.desktopBaseUrl, projectDirectory, sessionID),
+          desktopUrl: buildDesktopUrl(opencodeConfig.desktopBaseUrl, projectDirectory, sessionID, {
+            source,
+            serverUrl: opencodeConfig.serverUrl ?? opencodeConfig.baseUrl,
+          }),
           timestamp: new Date(),
         };
 
@@ -374,6 +377,7 @@ function setupOpenCodeMonitoring(
       sseClient.fetchSessionInfo(sessionID, directory),
     send: (notification) => notifier.send(notification),
     desktopBaseUrl: opencodeConfig.desktopBaseUrl,
+    serverUrl: opencodeConfig.serverUrl ?? opencodeConfig.baseUrl,
     source,
   };
 
