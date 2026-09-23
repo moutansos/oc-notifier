@@ -13,7 +13,12 @@
 
 import type { Notification, NotificationChoice, NotificationType } from "./providers/types.ts";
 import type { IngestConfig } from "./config.ts";
-import { mapClaudeCodeHook, type ClaudeCodeHookPayload } from "./claude-code.ts";
+import {
+  activeBackgroundTasks,
+  describeBackgroundTasks,
+  mapClaudeCodeHook,
+  type ClaudeCodeHookPayload,
+} from "./claude-code.ts";
 import {
   mapGrokCodeHook,
   summarizeGrokPayload,
@@ -147,8 +152,11 @@ export class IngestServer {
     const notification = mapClaudeCodeHook(payload);
 
     if (!notification) {
+      const isMainStop = payload.hook_event_name === "Stop" && !payload.agent_id;
+      const background = isMainStop ? describeBackgroundTasks(activeBackgroundTasks(payload)) : "";
+      const waiting = background ? ` waiting_on=${background}` : "";
       console.log(
-        `Ingest /v1/claude-code/hook: ignored event=${payload.hook_event_name ?? "?"} type=${payload.notification_type ?? "-"} agent=${payload.agent_id ?? "-"}`
+        `Ingest /v1/claude-code/hook: ignored event=${payload.hook_event_name ?? "?"} type=${payload.notification_type ?? "-"} agent=${payload.agent_id ?? "-"}${waiting}`
       );
       return json({ ok: true, ignored: true });
     }

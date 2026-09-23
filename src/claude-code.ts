@@ -10,7 +10,13 @@ export type ClaudeCodeHookEventName =
   | "Notification"
   | "PermissionRequest"
   | "Stop"
+  | "StopFailure"
   | "SubagentStop";
+
+export interface ClaudeCodeBackgroundTask {
+  type?: string;
+  status?: string;
+}
 
 export interface ClaudeCodeHookPayload {
   session_id?: string;
@@ -31,6 +37,51 @@ export interface ClaudeCodeHookPayload {
   // Stop
   last_assistant_message?: string;
   stop_hook_active?: boolean;
+  background_tasks?: unknown[];
+  session_crons?: unknown[];
+  error?: string;
+  error_details?: string;
+}
+
+const finishedTaskStatuses = new Set([
+  "completed",
+  "failed",
+  "killed",
+  "cancelled",
+  "canceled",
+  "stopped",
+]);
+
+const taskTypesAliveUntilShutdown = new Set(["teammate"]);
+
+export function activeBackgroundTasks(payload: ClaudeCodeHookPayload): ClaudeCodeBackgroundTask[] {
+  if (!Array.isArray(payload.background_tasks)) {
+    return [];
+  }
+
+  const active: ClaudeCodeBackgroundTask[] = [];
+  for (const item of payload.background_tasks) {
+    const task = asBackgroundTask(item);
+    if (task.type && taskTypesAliveUntilShutdown.has(task.type.toLowerCase())) continue;
+    if (task.status && finishedTaskStatuses.has(task.status.toLowerCase())) continue;
+    active.push(task);
+  }
+  return active;
+}
+
+export function describeBackgroundTasks(tasks: ClaudeCodeBackgroundTask[]): string {
+  return tasks.map((task) => (task.type || "task").replace(/\s+/g, "_")).join(",");
+}
+
+function asBackgroundTask(item: unknown): ClaudeCodeBackgroundTask {
+  if (typeof item !== "object" || item === null) {
+    return {};
+  }
+  const obj = item as Record<string, unknown>;
+  return {
+    type: typeof obj.type === "string" ? obj.type : undefined,
+    status: typeof obj.status === "string" ? obj.status : undefined,
+  };
 }
 
 /**
@@ -69,8 +120,21 @@ export function mapClaudeCodeHook(payload: ClaudeCodeHookPayload): Notification 
   if (eventName === "Stop") {
     // Stop fires when Claude finishes responding — treat as idle/ready for input.
     // SubagentStop is excluded by agent_id check above; bare Stop is main thread.
+    const pausedForBackgroundWork = activeBackgroundTasks(payload).length > 0;
+    if (pausedForBackgroundWork) {
+      return null;
+    }
+
     return {
       ...base,
+      type: "idle",
+    };
+  }
+
+  if (eventName === "StopFailure") {
+    return {
+      ...base,
+      sessionTitle: `API error: ${payload.error || "unknown"}`,
       type: "idle",
     };
   }

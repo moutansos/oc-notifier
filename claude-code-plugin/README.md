@@ -11,6 +11,7 @@ only relays Claude Code hook payloads.
 Claude Code hooks  →  forward.sh  →  oc-notifier HTTP ingest  →  providers
   Notification           POST /v1/claude-code/hook
   PermissionRequest
+  Stop / StopFailure
 ```
 
 Hooked events:
@@ -21,7 +22,8 @@ Hooked events:
 | `Notification` | `agent_needs_input` | `permission` |
 | `Notification` | `elicitation_dialog` | `question` |
 | `PermissionRequest` | all tools (incl. `AskUserQuestion`) | `permission` / `question` |
-| `Stop` | (always) | `idle` |
+| `Stop` | no background tasks running | `idle` |
+| `StopFailure` | all API errors | `idle` (title shows the error, e.g. `API error: rate_limit`) |
 
 **Permissions:** Claude fires a dedicated **`PermissionRequest`** hook when a tool needs
 approval (`AskUserQuestion` → `question`, everything else → `permission`).
@@ -33,6 +35,23 @@ The plugin now matches only the immediate event; oc-notifier drops the twins ser
 too, so an older plugin install cannot reintroduce the duplicate.
 
 Subagent events (`agent_id` present) are ignored by oc-notifier.
+
+**Background work:** when Claude stops while background subagents, shells, monitors,
+workflows, or any other background task are still running, the session is only paused.
+Each finishing task wakes the main thread, which fires `Stop` again. oc-notifier reads the
+`Stop` payload's `background_tasks` list and stays silent until a `Stop` arrives with
+nothing left in flight, so you get one notification when the session is actually quiet.
+The ingest log shows these as `ignored event=Stop … waiting_on=subagent,shell`.
+
+- A long-running background process, such as a dev server or `tail -f`, silences **every**
+  idle notification for that session until it exits.
+- [Agent-team](https://code.claude.com/docs/en/agent-teams) teammates don't count. They
+  stay alive until the team shuts down, so waiting on them would mean no notification at all.
+- Scheduled wakeups (`session_crons`, from `/loop` or `CronCreate`) don't count either.
+- Claude Code versions that don't send `background_tasks` notify on every `Stop`, as before.
+
+**API errors:** a turn that ends on an API error fires `StopFailure` instead of `Stop`.
+It is always forwarded, so a session that fails on its last wake-up doesn't go silent.
 
 ## Prerequisites
 
@@ -110,7 +129,7 @@ When enabling, Claude Code prompts for:
 ## Verify
 
 1. Start oc-notifier with ingest enabled
-2. In Claude Code, run `/hooks` and confirm `Notification` / `PermissionRequest` hooks from this plugin
+2. In Claude Code, run `/hooks` and confirm `Notification` / `PermissionRequest` / `Stop` / `StopFailure` hooks from this plugin
 3. Let Claude finish a turn or request a permission — you should see an ingest log line and a provider notification
 
 ## Manual test
@@ -122,6 +141,16 @@ echo '{
   "cwd": "/home/you/project",
   "hook_event_name": "Stop",
   "last_assistant_message": "Done."
+}' | curl -sS -X POST http://127.0.0.1:4100/v1/claude-code/hook \
+  -H 'Content-Type: application/json' \
+  -d @-
+
+# Stop with a background subagent still running → ignored (no notification)
+echo '{
+  "session_id": "test-session",
+  "cwd": "/home/you/project",
+  "hook_event_name": "Stop",
+  "background_tasks": [{ "id": "task-001", "type": "subagent", "status": "running" }]
 }' | curl -sS -X POST http://127.0.0.1:4100/v1/claude-code/hook \
   -H 'Content-Type: application/json' \
   -d @-
