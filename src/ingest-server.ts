@@ -149,7 +149,7 @@ export class IngestServer {
     }
 
     const payload = body as ClaudeCodeHookPayload;
-    const notification = mapClaudeCodeHook(payload);
+    const notification = await mapClaudeCodeHook(payload);
 
     if (!notification) {
       const isMainStop = payload.hook_event_name === "Stop" && !payload.agent_id;
@@ -162,7 +162,7 @@ export class IngestServer {
     }
 
     console.log(
-      `Ingest /v1/claude-code/hook: type=${notification.type} session=${notification.sessionId} event=${payload.hook_event_name}`
+      `Ingest /v1/claude-code/hook: type=${notification.type} session=${notification.sessionId} title=${JSON.stringify(notification.sessionTitle)} event=${payload.hook_event_name}`
     );
     await this.notifier.send(notification);
     return json({ ok: true });

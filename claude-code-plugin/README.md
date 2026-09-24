@@ -53,6 +53,16 @@ The ingest log shows these as `ignored event=Stop … waiting_on=subagent,shell`
 **API errors:** a turn that ends on an API error fires `StopFailure` instead of `Stop`.
 It is always forwarded, so a session that fails on its last wake-up doesn't go silent.
 
+**Session titles:** the hooks this plugin forwards don't carry the session name, so
+oc-notifier reads it from the transcript at `transcript_path`: your `/rename` title if you
+set one, otherwise the title Claude Code generates (the name `/resume` shows). Discord
+cards read `{project} · {session}`; `StopFailure` cards keep the API error instead.
+
+oc-notifier must be able to read that file: run it on the same machine, as the same user
+(in Docker, mount `~/.claude/projects` at the same absolute path). Use a
+[parent instance](../README.md#parent-instance-sub-instances) to centralize delivery.
+Without a readable, titled transcript, the project folder name is used.
+
 ## Prerequisites
 
 1. [oc-notifier](../README.md) running with ingest enabled

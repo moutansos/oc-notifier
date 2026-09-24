@@ -1,7 +1,14 @@
 /**
  * Map Claude Code hook payloads to oc-notifier Notification objects.
  * The Claude Code plugin forwards hook JSON as-is; this module normalizes it.
+ *
+ * Hooks do not include the session title. Claude Code appends it to the
+ * transcript JSONL at `transcript_path` (`custom-title` from `/rename`,
+ * `ai-title` otherwise). We read that on notify so Discord/Teams show it.
  */
+
+import { stat } from "node:fs/promises";
+import { basename, isAbsolute } from "node:path";
 
 import type { Notification, NotificationChoice } from "./providers/types.ts";
 
@@ -54,6 +61,19 @@ const finishedTaskStatuses = new Set([
 
 const taskTypesAliveUntilShutdown = new Set(["teammate"]);
 
+/** Transcript title records, highest precedence first. */
+const titleRecords = [
+  { type: "custom-title", field: "customTitle" },
+  { type: "ai-title", field: "aiTitle" },
+  { type: "summary", field: "summary" },
+] as const;
+
+/**
+ * Claude Code re-appends title metadata every 32 KiB of transcript and reads it
+ * back from the last 64 KiB, so a tail read always sees the latest title.
+ */
+export const transcriptTailBytes = 128 * 1024;
+
 export function activeBackgroundTasks(payload: ClaudeCodeHookPayload): ClaudeCodeBackgroundTask[] {
   if (!Array.isArray(payload.background_tasks)) {
     return [];
@@ -88,7 +108,103 @@ function asBackgroundTask(item: unknown): ClaudeCodeBackgroundTask {
  * Convert a Claude Code hook payload into a Notification, or null if it
  * should be ignored (unknown event, subagent, unsupported notification type).
  */
-export function mapClaudeCodeHook(payload: ClaudeCodeHookPayload): Notification | null {
+export async function mapClaudeCodeHook(payload: ClaudeCodeHookPayload): Promise<Notification | null> {
+  const notification = classifyClaudeCodeHook(payload);
+  // StopFailure keeps the API error as its title.
+  if (!notification || payload.hook_event_name === "StopFailure") {
+    return notification;
+  }
+
+  const title = await readClaudeCodeSessionTitle(payload.transcript_path, payload.session_id);
+  if (title) {
+    notification.sessionTitle = title;
+  }
+  return notification;
+}
+
+/**
+ * Read the session title from a Claude Code transcript. The last record of each
+ * type wins; `custom-title` beats `ai-title`, which beats a legacy `summary`.
+ * Fail-open: a missing or unreadable transcript leaves the project-name fallback.
+ */
+export async function readClaudeCodeSessionTitle(
+  transcriptPath: string | undefined,
+  sessionId: string | undefined
+): Promise<string | undefined> {
+  if (!isTranscriptPathFor(transcriptPath, sessionId)) {
+    return undefined;
+  }
+
+  try {
+    const info = await stat(transcriptPath);
+    if (!info.isFile()) {
+      return undefined;
+    }
+
+    // Start one byte early so a window that begins on a line boundary keeps that line.
+    const start = Math.max(0, info.size - transcriptTailBytes - 1);
+    const lines = (await Bun.file(transcriptPath).slice(start).text()).split("\n");
+    if (start > 0) {
+      // Partial (or empty) first line.
+      lines.shift();
+    }
+
+    const latest = new Map<string, string>();
+    for (const line of lines) {
+      const record = titleRecords.find((r) => line.includes(`"type":"${r.type}"`));
+      if (!record) continue;
+
+      let entry: unknown;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (typeof entry !== "object" || entry === null) continue;
+
+      const obj = entry as Record<string, unknown>;
+      if (obj.type !== record.type) continue;
+      if (typeof obj.sessionId === "string" && obj.sessionId !== sessionId) continue;
+
+      const value = obj[record.field];
+      if (typeof value === "string") {
+        // An empty custom-title means the user cleared their /rename.
+        latest.set(record.type, value.trim());
+      }
+    }
+
+    for (const record of titleRecords) {
+      const title = latest.get(record.type);
+      if (title) {
+        return title;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
+/**
+ * `transcript_path` comes from the request body, so only accept what Claude Code
+ * writes: an absolute `<session_id>.jsonl`. UNC paths would open SMB connections on Windows.
+ */
+function isTranscriptPathFor(
+  transcriptPath: string | undefined,
+  sessionId: string | undefined
+): transcriptPath is string {
+  return (
+    typeof transcriptPath === "string" &&
+    typeof sessionId === "string" &&
+    sessionId !== "" &&
+    isAbsolute(transcriptPath) &&
+    !/^[\\/]{2}/.test(transcriptPath) &&
+    basename(transcriptPath) === `${sessionId}.jsonl`
+  );
+}
+
+function classifyClaudeCodeHook(payload: ClaudeCodeHookPayload): Notification | null {
   // Skip subagent events (agent_id present means we're inside a subagent)
   if (payload.agent_id) {
     return null;
