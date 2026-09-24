@@ -1,6 +1,8 @@
 /**
  * Microsoft Teams webhook notification provider
  * Uses Adaptive Cards format for rich notifications
+ *
+ * - card title: "{project} · {event}"
  */
 
 import type { MSTeamsProviderConfig } from "../config.ts";
@@ -29,11 +31,12 @@ export class MSTeamsProvider implements NotificationProvider {
 
     const isQuestion = notification.type === "question";
     const isPermission = notification.type === "permission";
-    const title = isPermission
-      ? `Permission Required: ${projectName}`
+    const eventLabel = isPermission
+      ? "Permission Required"
       : isQuestion
-        ? `Question Pending: ${projectName}`
-        : `Session Idle: ${projectName}`;
+        ? "Question Pending"
+        : "Session Idle";
+    const title = `${projectName} · ${eventLabel}`;
     const status = isPermission
       ? "Waiting for permission"
       : isQuestion ? "Waiting for your response" : "Ready for input";
@@ -45,6 +48,7 @@ export class MSTeamsProvider implements NotificationProvider {
         weight: "Bolder",
         text: title,
         style: "heading",
+        wrap: true,
         color: isPermission ? "attention" : isQuestion ? "warning" : "default",
       },
       {
